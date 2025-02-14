@@ -16,7 +16,7 @@ const
   paCode* = " --doc.plausibleAnalytics:nim-lang.org"
   # errormax: subsequent errors are probably consequences of 1st one; a simple
   # bug could cause unlimited number of errors otherwise, hard to debug in CI.
-  docDefines = "-d:nimExperimentalLinenoiseExtra"
+  docDefines = "-d:nimExperimentalLinenoiseExtra" # deadcode `nimExperimentalLinenoiseExtra` has been enabled
   nimArgs = "--errormax:3 --hint:Conf:off --hint:Path:off --hint:Processing:off --hint:XDeclaredButNotUsed:off --warning:UnusedImport:off -d:boot --putenv:nimversion=$# $#" % [system.NimVersion, docDefines]
   gitUrl = "https://github.com/nim-lang/Nim"
   docHtmlOutput = "doc/html"
@@ -37,8 +37,7 @@ proc exe*(f: string): string =
 proc findNimImpl*(): tuple[path: string, ok: bool] =
   if nimExe.len > 0: return (nimExe, true)
   let nim = "nim".exe
-  result.path = "bin" / nim
-  result.ok = true
+  result = ("bin" / nim, true)
   if fileExists(result.path): return
   for dir in split(getEnv("PATH"), PathSep):
     result.path = dir / nim
@@ -93,17 +92,23 @@ proc nimCompileFold*(desc, input: string, outputDir = "bin", mode = "c", options
   let cmd = findNim().quoteShell() & " " & mode & " -o:" & output & " " & options & " " & input
   execFold(desc, cmd)
 
+const officialPackagesMarkdown = """
+pkgs/atlas/doc/atlas.md
+""".splitWhitespace()
+
 proc getMd2html(): seq[string] =
+  result = @[]
   for a in walkDirRecFilter("doc"):
     let path = a.path
     if a.kind == pcFile and path.splitFile.ext == ".md" and path.lastPathPart notin
-        ["docs.md", "nimfix.md",
+        ["docs.md",
          "docstyle.md" # docstyle.md shouldn't be converted to html separately;
                        # it's included in contributing.md.
         ]:
-          # maybe we should still show nimfix, could help reviving it
           # `docs` is redundant with `overview`, might as well remove that file?
       result.add path
+  for md in officialPackagesMarkdown:
+    result.add md
   doAssert "doc/manual/var_t_return.md".unixToNativePath in result # sanity check
 
 const
@@ -149,6 +154,7 @@ lib/posix/posix_openbsd_amd64.nim
 lib/posix/posix_haiku.nim
 lib/pure/md5.nim
 lib/std/sha1.nim
+lib/pure/htmlparser.nim
 """.splitWhitespace()
 
   officialPackagesList = """
@@ -162,6 +168,10 @@ pkgs/db_connector/src/db_connector/db_postgres.nim
 pkgs/db_connector/src/db_connector/db_sqlite.nim
 pkgs/checksums/src/checksums/md5.nim
 pkgs/checksums/src/checksums/sha1.nim
+pkgs/checksums/src/checksums/sha2.nim
+pkgs/checksums/src/checksums/sha3.nim
+pkgs/checksums/src/checksums/bcrypt.nim
+pkgs/htmlparser/src/htmlparser.nim
 """.splitWhitespace()
 
   officialPackagesListWithoutIndex = """
@@ -180,18 +190,20 @@ when (NimMajor, NimMinor) < (1, 1) or not declared(isRelativeTo):
     result = path.len > 0 and not ret.startsWith ".."
 
 proc getDocList(): seq[string] =
-  var docIgnore: HashSet[string]
+  ##
+  result = @[]
+  var docIgnore: HashSet[string] = initHashSet[string]()
   for a in withoutIndex: docIgnore.incl a
   for a in ignoredModules: docIgnore.incl a
 
   # don't ignore these even though in lib/system (not include files)
   const goodSystem = """
 lib/system/nimscript.nim
-lib/system/assertions.nim
 lib/system/iterators.nim
 lib/system/exceptions.nim
 lib/system/dollars.nim
 lib/system/ctypes.nim
+lib/system/repr_v2.nim
 """.splitWhitespace()
 
   proc follow(a: PathEntry): bool =
@@ -314,8 +326,9 @@ proc nim2pdf(src: string, dst: string, nimArgs: string) =
       exec(cmd)
   moveFile(texFile.changeFileExt("pdf"), dst)
 
-proc buildPdfDoc*(nimArgs, destPath: string) =
-  var pdfList: seq[string]
+proc buildPdfDoc*(args: string, destPath: string) =
+  let args = nimArgs & " " & args
+  var pdfList: seq[string] = @[]
   createDir(destPath)
   if os.execShellCmd("xelatex -version") != 0:
     doAssert false, "xelatex not found" # or, raise an exception
@@ -323,7 +336,7 @@ proc buildPdfDoc*(nimArgs, destPath: string) =
     for src in items(mdPdfList):
       let dst = destPath / src.lastPathPart.changeFileExt("pdf")
       pdfList.add dst
-      nim2pdf(src, dst, nimArgs)
+      nim2pdf(src, dst, args)
   echo "\nOutput PDF files: \n  ", pdfList.join(" ") # because `nim2pdf` is a bit verbose
 
 proc buildJS(): string =
@@ -336,7 +349,7 @@ proc buildJS(): string =
 proc buildDocsDir*(args: string, dir: string) =
   let args = nimArgs & " " & args
   let docHackJsSource = buildJS()
-  gitClonePackages(@["asyncftpclient", "punycode", "smtp", "db_connector", "checksums"])
+  gitClonePackages(@["asyncftpclient", "punycode", "smtp", "db_connector", "checksums", "atlas", "htmlparser"])
   createDir(dir)
   buildDocSamples(args, dir)
 

@@ -26,8 +26,7 @@ import
 when defined(nimPreviewSlimSystem):
   import std/[syncio, assertions]
 
-import ic / [cbackend, integrity, navigator]
-from ic / ic import rodViewer
+import ic / [cbackend, integrity, navigator, ic]
 
 import ../dist/checksums/src/checksums/sha1
 
@@ -56,7 +55,7 @@ proc writeCMakeDepsFile(conf: ConfigRef) =
   for it in conf.toCompile: cfiles.add(it.cname.string)
   let fileset = cfiles.toCountTable()
   # read old cfiles list
-  var fl: File
+  var fl: File = default(File)
   var prevset = initCountTable[string]()
   if open(fl, fname.string, fmRead):
     for line in fl.lines: prevset.inc(line)
@@ -115,7 +114,7 @@ when not defined(leanCompiler):
       setPipeLinePass(graph, Docgen2JsonPass)
     of HtmlExt:
       setPipeLinePass(graph, Docgen2Pass)
-    else: doAssert false, $ext
+    else: raiseAssert $ext
     compilePipelineProject(graph)
 
 proc commandCompileToC(graph: ModuleGraph) =
@@ -151,7 +150,7 @@ proc commandCompileToC(graph: ModuleGraph) =
     extccomp.callCCompiler(conf)
     # for now we do not support writing out a .json file with the build instructions when HCR is on
     if not conf.hcrOn:
-      extccomp.writeJsonBuildInstructions(conf)
+      extccomp.writeJsonBuildInstructions(conf, graph.cachedFiles)
     if optGenScript in graph.config.globalOptions:
       writeDepsFile(graph)
     if optGenCDeps in graph.config.globalOptions:
@@ -195,9 +194,8 @@ proc commandScan(cache: IdentCache, config: ConfigRef) =
   var stream = llStreamOpen(f, fmRead)
   if stream != nil:
     var
-      L: Lexer
-      tok: Token
-    initToken(tok)
+      L: Lexer = default(Lexer)
+      tok: Token = default(Token)
     openLexer(L, f, stream, cache, config)
     while true:
       rawGetTok(L, tok)
@@ -267,7 +265,7 @@ proc mainCommand*(graph: ModuleGraph) =
         # and it has added this define implictly, so we must undo that here.
         # A better solution might be to fix system.nim
         undefSymbol(conf.symbols, "useNimRtl")
-    of backendInvalid: doAssert false
+    of backendInvalid: raiseAssert "unreachable"
 
   proc compileToBackend() =
     customizeForBackend(conf.backend)
@@ -277,7 +275,7 @@ proc mainCommand*(graph: ModuleGraph) =
     of backendCpp: commandCompileToC(graph)
     of backendObjc: commandCompileToC(graph)
     of backendJs: commandCompileToJS(graph)
-    of backendInvalid: doAssert false
+    of backendInvalid: raiseAssert "unreachable"
 
   template docLikeCmd(body) =
     when defined(leanCompiler):
@@ -297,14 +295,18 @@ proc mainCommand*(graph: ModuleGraph) =
     # so by default should not end up in $PWD nor in $projectPath.
     var ret = if optUseNimcache in conf.globalOptions: getNimcacheDir(conf)
               else: conf.projectPath
-    doAssert ret.string.isAbsolute # `AbsoluteDir` is not a real guarantee
+    if not ret.string.isAbsolute: # `AbsoluteDir` is not a real guarantee
+      rawMessage(conf, errCannotOpenFile, ret.string & "/")
     if conf.cmd in cmdDocLike + {cmdRst2html, cmdRst2tex, cmdMd2html, cmdMd2tex}:
       ret = ret / htmldocsDir
     conf.outDir = ret
 
   ## process all commands
   case conf.cmd
-  of cmdBackends: compileToBackend()
+  of cmdBackends:
+    compileToBackend()
+    when BenchIC:
+      echoTimes graph.packed
   of cmdTcc:
     when hasTinyCBackend:
       extccomp.setCC(conf, "tcc", unknownLineInfo)
@@ -400,6 +402,10 @@ proc mainCommand*(graph: ModuleGraph) =
       for it in conf.searchPaths: msgWriteln(conf, it.string)
   of cmdCheck:
     commandCheck(graph)
+  of cmdM:
+    graph.config.symbolFiles = v2Sf
+    setUseIc(graph.config.symbolFiles != disabledSf)
+    commandCheck(graph)
   of cmdParse:
     wantMainModule(conf)
     discard parseFile(conf.projectMainIdx, cache, conf)
@@ -417,7 +423,7 @@ proc mainCommand*(graph: ModuleGraph) =
   of cmdJsonscript:
     setOutFile(graph.config)
     commandJsonScript(graph)
-  of cmdUnknown, cmdNone, cmdIdeTools, cmdNimfix:
+  of cmdUnknown, cmdNone, cmdIdeTools:
     rawMessage(conf, errGenerated, "invalid command: " & conf.command)
 
   if conf.errorCounter == 0 and conf.cmd notin {cmdTcc, cmdDump, cmdNop}:

@@ -61,43 +61,44 @@ Standard library modules
 
 At least the following standard library modules are available:
 
-* [macros](macros.html)
-* [os](os.html)
-* [strutils](strutils.html)
-* [math](math.html)
-* [distros](distros.html)
-* [sugar](sugar.html)
 * [algorithm](algorithm.html)
 * [base64](base64.html)
 * [bitops](bitops.html)
 * [chains](chains.html)
 * [colors](colors.html)
 * [complex](complex.html)
+* [distros](distros.html)
+* [std/editdistance](editdistance.html)
 * [htmlgen](htmlgen.html)
+* [htmlparser](htmlparser.html)
 * [httpcore](httpcore.html)
+* [json](json.html)
 * [lenientops](lenientops.html)
+* [macros](macros.html)
+* [math](math.html)
 * [options](options.html)
+* [os](os.html)
+* [parsecfg](parsecfg.html)
+* [parsecsv](parsecsv.html)
+* [parsejson](parsejson.html)
+* [parsesql](parsesql.html)
 * [parseutils](parseutils.html)
 * [punycode](punycode.html)
 * [random](random.html)
+* [ropes](ropes.html)
+* [std/setutils](setutils.html)
 * [stats](stats.html)
 * [strformat](strformat.html)
 * [strmisc](strmisc.html)
 * [strscans](strscans.html)
-* [unicode](unicode.html)
-* [uri](uri.html)
-* [std/editdistance](editdistance.html)
-* [std/wordwrap](wordwrap.html)
-* [parsecsv](parsecsv.html)
-* [parsecfg](parsecfg.html)
-* [parsesql](parsesql.html)
-* [xmlparser](xmlparser.html)
-* [htmlparser](htmlparser.html)
-* [ropes](ropes.html)
-* [json](json.html)
-* [parsejson](parsejson.html)
 * [strtabs](strtabs.html)
+* [strutils](strutils.html)
+* [sugar](sugar.html)
+* [unicode](unicode.html)
 * [unidecode](unidecode.html)
+* [uri](uri.html)
+* [std/wordwrap](wordwrap.html)
+* [xmlparser](xmlparser.html)
 
 In addition to the standard Nim syntax ([system](system.html) module),
 NimScripts support the procs and templates defined in the
@@ -124,6 +125,8 @@ Here are few examples of using the `switch` proc:
   switch("define", "release")
   # command-line: --forceBuild
   switch("forceBuild")
+  # command-line: --hint[Conf]:off or --hint:Conf:off
+  switch("hint", "[Conf]:off")
   ```
 
 NimScripts also support `--`:option: templates for convenience, which look
@@ -329,7 +332,7 @@ Evolving Scripting language
 
 NimScript evolves together with Nim,
 [occasionally new features might become available on NimScript](
-https://github.com/nim-lang/Nim/pulls?utf8=%E2%9C%93&q=nimscript),
+https://github.com/nim-lang/Nim/pulls?q=nimscript+is%3Amerged),
 adapted from compiled Nim or added as new features on both.
 
 Scripting Language with a Package Manager

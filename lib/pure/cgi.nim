@@ -29,7 +29,7 @@
 ##   writeLine(stdout, "</body></html>")
 ##   ```
 
-import strutils, os, strtabs, cookies, uri
+import std/[strutils, os, strtabs, cookies, uri]
 export uri.encodeUrl, uri.decodeUrl
 
 when defined(nimPreviewSlimSystem):
@@ -83,6 +83,8 @@ proc getEncodedData(allowedMethods: set[RequestMethod]): string =
   else:
     if methodNone notin allowedMethods:
       cgiError("'REQUEST_METHOD' must be 'POST' or 'GET'")
+    else:
+      result = ""
 
 iterator decodeData*(data: string): tuple[key, value: string] =
   ## Reads and decodes CGI data and yields the (name, value) pairs the

@@ -1,7 +1,7 @@
 #
 #
 #            Nim's Runtime Library
-#        (c) Copyright 2011 Alexander Mitchell-Robinson
+#        (c) Copyright 2024 Nim Contributors
 #
 #    See the file "copying.txt", included in this
 #    distribution, for details about the copyright.
@@ -82,7 +82,8 @@ runnableExamples:
 
 import std/private/since
 
-import macros
+import std/macros
+from std/typetraits import supportsCopyMem
 
 when defined(nimPreviewSlimSystem):
   import std/assertions
@@ -140,6 +141,22 @@ func concat*[T](seqs: varargs[seq[T]]): seq[T] =
       result[i] = itm
       inc(i)
 
+func addUnique*[T](s: var seq[T], x: sink T) =
+  ## Adds `x` to the container `s` if it is not already present. 
+  ## Uses `==` to check if the item is already present.
+  runnableExamples:
+    var a = @[1, 2, 3]
+    a.addUnique(4)
+    a.addUnique(4)
+    assert a == @[1, 2, 3, 4]
+
+  for i in 0..high(s):
+    if s[i] == x: return
+  when declared(ensureMove):
+    s.add ensureMove(x)
+  else:
+    s.add x
+
 func count*[T](s: openArray[T], x: T): int =
   ## Returns the number of occurrences of the item `x` in the container `s`.
   ##
@@ -150,7 +167,7 @@ func count*[T](s: openArray[T], x: T): int =
     assert count(a, 2) == 4
     assert count(a, 99) == 0
     assert count(b, 'r') == 2
-
+  result = 0
   for itm in items(s):
     if itm == x:
       inc result
@@ -227,7 +244,7 @@ func minIndex*[T](s: openArray[T]): int {.since: (1, 1).} =
     assert minIndex(b) == 3
     assert minIndex(c) == 1
     assert minIndex(d) == 2
-
+  result = 0
   for i in 1..high(s):
     if s[i] < s[result]: result = i
 
@@ -244,7 +261,7 @@ func maxIndex*[T](s: openArray[T]): int {.since: (1, 1).} =
     assert maxIndex(b) == 0
     assert maxIndex(c) == 2
     assert maxIndex(d) == 0
-
+  result = 0
   for i in 1..high(s):
     if s[i] > s[result]: result = i
 
@@ -860,7 +877,7 @@ template toSeq*(iter: untyped): untyped =
           inc i
         result
     else:
-      var result: seq[typeof(iter)]# = @[]
+      var result: seq[typeof(iter)] = @[]
       for x in iter:
         result.add(x)
       result
@@ -1086,8 +1103,12 @@ template newSeqWith*(len: int, init: untyped): untyped =
     import std/random
     var seqRand = newSeqWith(20, rand(1.0))
     assert seqRand[0] != seqRand[1]
+  type T = typeof(init)
   let newLen = len
-  var result = newSeq[typeof(init)](newLen)
+  when supportsCopyMem(T) and declared(newSeqUninit):
+    var result = newSeqUninit[T](newLen)
+  else: # TODO: use `newSeqUnsafe` when that's available
+    var result = newSeq[T](newLen)
   for i in 0 ..< newLen:
     result[i] = init
   move(result) # refs bug #7295

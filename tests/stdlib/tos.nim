@@ -27,9 +27,8 @@ Raises
 """
 # test os path creation, iteration, and deletion
 
-import os, strutils, pathnorm
 from stdtest/specialpaths import buildDir
-import std/[syncio, assertions]
+import std/[syncio, assertions, osproc, os, strutils, pathnorm]
 
 block fileOperations:
   let files = @["these.txt", "are.x", "testing.r", "files.q"]
@@ -160,6 +159,18 @@ block fileOperations:
 
   # createDir should not fail if `dir` is empty
   createDir("")
+
+
+  when defined(linux): # bug #24174
+    createDir("a/b")
+    open("a/file.txt", fmWrite).close
+
+    if not fileExists("a/fifoFile"):
+      doAssert execCmd("mkfifo -m 600 a/fifoFile") == 0
+
+    copyDir("a/", "../dest/a/", skipSpecial = true)
+    copyDirWithPermissions("a/", "../dest2/a/", skipSpecial = true)
+    removeDir("a")
 
   # Symlink handling in `copyFile`, `copyFileWithPermissions`, `copyFileToDir`,
   # `copyDir`, `copyDirWithPermissions`, `moveFile`, and `moveDir`.
@@ -830,3 +841,35 @@ block:  # isValidFilename
   doAssert isValidFilename("ux.bat")
   doAssert isValidFilename("nim.nim")
   doAssert isValidFilename("foo.log")
+
+block: # searchExtPos
+  doAssert "foo.nim".searchExtPos == 3
+  doAssert "/foo.nim".searchExtPos == 4
+  doAssert "".searchExtPos == -1
+  doAssert "/".searchExtPos == -1
+  doAssert "a.b/foo".searchExtPos == -1
+  doAssert ".".searchExtPos == -1
+  doAssert "foo.".searchExtPos == 3
+  doAssert "foo..".searchExtPos == 4
+  doAssert "..".searchExtPos == -1
+  doAssert "...".searchExtPos == -1
+  doAssert "./".searchExtPos == -1
+  doAssert "../".searchExtPos == -1
+  doAssert "/.".searchExtPos == -1
+  doAssert "/..".searchExtPos == -1
+  doAssert ".b".searchExtPos == -1
+  doAssert "..b".searchExtPos == -1
+  doAssert "/.b".searchExtPos == -1
+  doAssert "a/.b".searchExtPos == -1
+  doAssert ".a.b".searchExtPos == 2
+  doAssert "a/.b.c".searchExtPos == 4
+  doAssert "a/..b".searchExtPos == -1
+  doAssert "a/b..c".searchExtPos == 4
+
+  when doslikeFileSystem:
+    doAssert "c:a.b".searchExtPos == 3
+    doAssert "c:.a".searchExtPos == -1
+    doAssert r"c:\.a".searchExtPos == -1
+    doAssert "c:..a".searchExtPos == -1
+    doAssert r"c:\..a".searchExtPos == -1
+    doAssert "c:.a.b".searchExtPos == 4

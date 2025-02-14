@@ -26,6 +26,9 @@ else:
     rcMask = 0b111
     rcShift = 3      # shift by rcShift to get the reference counter
 
+const
+  orcLeakDetector = defined(nimOrcLeakDetector)
+
 type
   RefHeader = object
     rc: int # the object header is now a single RC field.
@@ -36,8 +39,20 @@ type
                    # in O(1) without doubly linked lists
     when defined(nimArcDebug) or defined(nimArcIds):
       refId: int
+    when defined(gcOrc) and orcLeakDetector:
+      filename: cstring
+      line: int
 
   Cell = ptr RefHeader
+
+template setFrameInfo(c: Cell) =
+  when orcLeakDetector:
+    if framePtr != nil and framePtr.prev != nil:
+      c.filename = framePtr.prev.filename
+      c.line = framePtr.prev.line
+    else:
+      c.filename = nil
+      c.line = 0
 
 template head(p: pointer): Cell =
   cast[Cell](cast[int](p) -% sizeof(RefHeader))
@@ -87,6 +102,7 @@ proc nimNewObj(size, alignment: int): pointer {.compilerRtl.} =
       cfprintf(cstderr, "[nimNewObj] %p %ld\n", result, head(result).count)
   when traceCollector:
     cprintf("[Allocated] %p result: %p\n", result -! sizeof(RefHeader), result)
+  setFrameInfo head(result)
 
 proc nimNewObjUninit(size, alignment: int): pointer {.compilerRtl.} =
   # Same as 'newNewObj' but do not initialize the memory to zero.
@@ -109,9 +125,22 @@ proc nimNewObjUninit(size, alignment: int): pointer {.compilerRtl.} =
 
   when traceCollector:
     cprintf("[Allocated] %p result: %p\n", result -! sizeof(RefHeader), result)
+  setFrameInfo head(result)
 
 proc nimDecWeakRef(p: pointer) {.compilerRtl, inl.} =
   decrement head(p)
+
+proc isUniqueRef*[T](x: ref T): bool {.inline.} =
+  ## Returns true if the object `x` points to is uniquely referenced. Such
+  ## an object can potentially be passed over to a different thread safely,
+  ## if great care is taken. This queries the internal reference count of
+  ## the object which is subject to lots of optimizations! In other words
+  ## the value of `isUniqueRef` can depend on the used compiler version and
+  ## optimizer setting.
+  ## Nevertheless it can be used as a very valuable debugging tool and can
+  ## be used to specify the constraints of a threading related API
+  ## via `assert isUniqueRef(x)`.
+  head(cast[pointer](x)).rc == 0
 
 proc nimIncRef(p: pointer) {.compilerRtl, inl.} =
   when defined(nimArcDebug):
@@ -182,6 +211,7 @@ when defined(gcOrc):
     #include cyclecollector
 
 proc nimDecRefIsLast(p: pointer): bool {.compilerRtl, inl.} =
+  result = false
   if p != nil:
     var cell = head(p)
 
@@ -190,19 +220,22 @@ proc nimDecRefIsLast(p: pointer): bool {.compilerRtl, inl.} =
         writeStackTrace()
         cfprintf(cstderr, "[DecRef] %p %ld\n", p, cell.count)
 
-    if cell.count == 0:
-      result = true
-      when traceCollector:
-        cprintf("[ABOUT TO DESTROY] %p\n", cell)
+    when defined(gcAtomicArc) and hasThreadSupport:
+      # `atomicDec` returns the new value
+      if atomicDec(cell.rc, rcIncrement) == -rcIncrement:
+        result = true
+        when traceCollector:
+          cprintf("[ABOUT TO DESTROY] %p\n", cell)
     else:
-      decrement cell
-      # According to Lins it's correct to do nothing else here.
-      when traceCollector:
-        cprintf("[DECREF] %p\n", cell)
-
-proc nimDupRef(dest: ptr pointer, src: pointer) {.compilerRtl, inl.} =
-  dest[] = src
-  if src != nil: nimIncRef src
+      if cell.count == 0:
+        result = true
+        when traceCollector:
+          cprintf("[ABOUT TO DESTROY] %p\n", cell)
+      else:
+        decrement cell
+        # According to Lins it's correct to do nothing else here.
+        when traceCollector:
+          cprintf("[DECREF] %p\n", cell)
 
 proc GC_unref*[T](x: ref T) =
   ## New runtime only supports this operation for 'ref T'.
@@ -215,16 +248,21 @@ proc GC_ref*[T](x: ref T) =
 
 when not defined(gcOrc):
   template GC_fullCollect* =
-    ## Forces a full garbage collection pass. With `--gc:arc` a nop.
+    ## Forces a full garbage collection pass. With `--mm:arc` a nop.
     discard
 
 template setupForeignThreadGc* =
-  ## With `--gc:arc` a nop.
+  ## With `--mm:arc` a nop.
   discard
 
 template tearDownForeignThreadGc* =
-  ## With `--gc:arc` a nop.
+  ## With `--mm:arc` a nop.
   discard
 
 proc isObjDisplayCheck(source: PNimTypeV2, targetDepth: int16, token: uint32): bool {.compilerRtl, inl.} =
   result = targetDepth <= source.depth and source.display[targetDepth] == token
+
+when defined(gcDestructors):
+  proc nimGetVTable(p: pointer, index: int): pointer
+        {.compilerRtl, inline, raises: [].} =
+    result = cast[ptr PNimTypeV2](p).vTable[index]

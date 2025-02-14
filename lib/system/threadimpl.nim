@@ -20,13 +20,8 @@ when not defined(useNimRtl):
       threadType = ThreadType.NimThread
 
 when defined(gcDestructors):
-  proc allocThreadStorage(size: int): pointer =
-    result = c_malloc(csize_t size)
-    zeroMem(result, size)
-
   proc deallocThreadStorage(p: pointer) = c_free(p)
 else:
-  template allocThreadStorage(size: untyped): untyped = allocShared0(size)
   template deallocThreadStorage(p: pointer) = deallocShared(p)
 
 template afterThreadRuns() =
@@ -73,7 +68,7 @@ else:
         when defined(nimV2):
           thrd.dataFn(thrd.data)
         else:
-          var x: TArg
+          var x: TArg = default(TArg)
           deepCopy(x, thrd.data)
           thrd.dataFn(x)
     except:

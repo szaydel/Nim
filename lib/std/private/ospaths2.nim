@@ -1,7 +1,7 @@
 include system/inclrtl
 import std/private/since
 
-import strutils, pathnorm
+import std/[strutils, pathnorm]
 import std/oserrors
 
 import oscommon
@@ -17,11 +17,9 @@ const weirdTarget = defined(nimscript) or defined(js)
 when weirdTarget:
   discard
 elif defined(windows):
-  import winlean
+  import std/winlean
 elif defined(posix):
-  import posix, system/ansi_c
-else:
-  {.error: "OS module not ported to your operating system!".}
+  import std/posix, system/ansi_c
 
 when weirdTarget:
   {.pragma: noWeirdTarget, error: "this proc is not available on the NimScript/js target".}
@@ -254,12 +252,12 @@ proc isAbsolute*(path: string): bool {.rtl, noSideEffect, extern: "nos$1", raise
     result = path[0] != ':'
   elif defined(RISCOS):
     result = path[0] == '$'
-  elif defined(posix) or defined(js):
-    # `or defined(js)` wouldn't be needed pending https://github.com/nim-lang/Nim/issues/13469
-    # This works around the problem for posix, but Windows is still broken with nim js -d:nodejs
+  elif defined(posix):
     result = path[0] == '/'
+  elif defined(nodejs):
+    {.emit: [result," = require(\"path\").isAbsolute(",path.cstring,");"].}
   else:
-    doAssert false # if ever hits here, adapt as needed
+    raiseAssert "unreachable" # if ever hits here, adapt as needed
 
 when FileSystemCaseSensitive:
   template `!=?`(a, b: char): bool = a != b
@@ -584,15 +582,28 @@ proc searchExtPos*(path: string): int =
     assert searchExtPos("c.nim") == 1
     assert searchExtPos("a/b/c.nim") == 5
     assert searchExtPos("a.b.c.nim") == 5
+    assert searchExtPos(".nim") == -1
+    assert searchExtPos("..nim") == -1
+    assert searchExtPos("a..nim") == 2
 
-  # BUGFIX: do not search until 0! .DS_Store is no file extension!
+  # Unless there is any char that is not `ExtSep` before last `ExtSep` in the file name,
+  # it is not a file extension.
+  const DirSeps = when doslikeFileSystem: {DirSep, AltSep, ':'} else: {DirSep, AltSep}
   result = -1
-  for i in countdown(len(path)-1, 1):
+  var i = path.high
+  while i >= 1:
     if path[i] == ExtSep:
+      break
+    elif path[i] in DirSeps:
+      return -1 # do not skip over path
+    dec i
+
+  for j in countdown(i - 1, 0):
+    if path[j] in DirSeps:
+      return -1
+    elif path[j] != ExtSep:
       result = i
       break
-    elif path[i] in {DirSep, AltSep}:
-      break # do not skip over path
 
 proc splitFile*(path: string): tuple[dir, name, ext: string] {.
   noSideEffect, rtl, extern: "nos$1".} =
@@ -750,9 +761,9 @@ proc cmpPaths*(pathA, pathB: string): int {.
   ## On a case-sensitive filesystem this is done
   ## case-sensitively otherwise case-insensitively. Returns:
   ##
-  ## | 0 if pathA == pathB
-  ## | < 0 if pathA < pathB
-  ## | > 0 if pathA > pathB
+  ## | `0` if pathA == pathB
+  ## | `< 0` if pathA < pathB
+  ## | `> 0` if pathA > pathB
   runnableExamples:
     when defined(macosx):
       assert cmpPaths("foo", "Foo") == 0
@@ -827,7 +838,7 @@ proc unixToNativePath*(path: string, drive=""): string {.
         inc(i)
 
 
-when not defined(nimscript):
+when not defined(nimscript) and supportedSystem:
   proc getCurrentDir*(): string {.rtl, extern: "nos$1", tags: [].} =
     ## Returns the `current working directory`:idx: i.e. where the built
     ## binary is run.
@@ -846,16 +857,16 @@ when not defined(nimscript):
       {.emit: "`ret` = process.cwd();".}
       return $ret
     elif defined(js):
-      doAssert false, "use -d:nodejs to have `getCurrentDir` defined"
+      raiseAssert "use -d:nodejs to have `getCurrentDir` defined"
     elif defined(windows):
       var bufsize = MAX_PATH.int32
-      var res = newWideCString("", bufsize)
+      var res = newWideCString(bufsize)
       while true:
         var L = getCurrentDirectoryW(bufsize, res)
         if L == 0'i32:
           raiseOSError(osLastError())
         elif L > bufsize:
-          res = newWideCString("", L)
+          res = newWideCString(L)
           bufsize = L
         else:
           result = res$L
@@ -876,7 +887,7 @@ when not defined(nimscript):
           else:
             raiseOSError(osLastError())
 
-proc absolutePath*(path: string, root = getCurrentDir()): string =
+proc absolutePath*(path: string, root = when supportedSystem: getCurrentDir() else: ""): string =
   ## Returns the absolute path of `path`, rooted at `root` (which must be absolute;
   ## default: current directory).
   ## If `path` is absolute, return it, ignoring `root`.
@@ -894,7 +905,7 @@ proc absolutePath*(path: string, root = getCurrentDir()): string =
     joinPath(root, path)
 
 proc absolutePathInternal(path: string): string =
-  absolutePath(path, getCurrentDir())
+  absolutePath(path)
 
 
 proc normalizePath*(path: var string) {.rtl, extern: "nos$1", tags: [].} =
@@ -971,47 +982,49 @@ proc normalizeExe*(file: var string) {.since: (1, 3, 5).} =
     if file.len > 0 and DirSep notin file and file != "." and file != "..":
       file = "./" & file
 
-proc sameFile*(path1, path2: string): bool {.rtl, extern: "nos$1",
-  tags: [ReadDirEffect], noWeirdTarget.} =
-  ## Returns true if both pathname arguments refer to the same physical
-  ## file or directory.
-  ##
-  ## Raises `OSError` if any of the files does not
-  ## exist or information about it can not be obtained.
-  ##
-  ## This proc will return true if given two alternative hard-linked or
-  ## sym-linked paths to the same file or directory.
-  ##
-  ## See also:
-  ## * `sameFileContent proc`_
-  when defined(windows):
-    var success = true
-    var f1 = openHandle(path1)
-    var f2 = openHandle(path2)
+when supportedSystem:
+  proc sameFile*(path1, path2: string): bool {.rtl, extern: "nos$1",
+    tags: [ReadDirEffect], noWeirdTarget.} =
+    ## Returns true if both pathname arguments refer to the same physical
+    ## file or directory.
+    ##
+    ## Raises `OSError` if any of the files does not
+    ## exist or information about it can not be obtained.
+    ##
+    ## This proc will return true if given two alternative hard-linked or
+    ## sym-linked paths to the same file or directory.
+    ##
+    ## See also:
+    ## * `sameFileContent proc`_
+    result = false
+    when defined(windows):
+      var success = true
+      var f1 = openHandle(path1)
+      var f2 = openHandle(path2)
 
-    var lastErr: OSErrorCode
-    if f1 != INVALID_HANDLE_VALUE and f2 != INVALID_HANDLE_VALUE:
-      var fi1, fi2: BY_HANDLE_FILE_INFORMATION
+      var lastErr: OSErrorCode
+      if f1 != INVALID_HANDLE_VALUE and f2 != INVALID_HANDLE_VALUE:
+        var fi1, fi2: BY_HANDLE_FILE_INFORMATION
 
-      if getFileInformationByHandle(f1, addr(fi1)) != 0 and
-         getFileInformationByHandle(f2, addr(fi2)) != 0:
-        result = fi1.dwVolumeSerialNumber == fi2.dwVolumeSerialNumber and
-                 fi1.nFileIndexHigh == fi2.nFileIndexHigh and
-                 fi1.nFileIndexLow == fi2.nFileIndexLow
+        if getFileInformationByHandle(f1, addr(fi1)) != 0 and
+           getFileInformationByHandle(f2, addr(fi2)) != 0:
+          result = fi1.dwVolumeSerialNumber == fi2.dwVolumeSerialNumber and
+                   fi1.nFileIndexHigh == fi2.nFileIndexHigh and
+                   fi1.nFileIndexLow == fi2.nFileIndexLow
+        else:
+          lastErr = osLastError()
+          success = false
       else:
         lastErr = osLastError()
         success = false
-    else:
-      lastErr = osLastError()
-      success = false
 
-    discard closeHandle(f1)
-    discard closeHandle(f2)
+      discard closeHandle(f1)
+      discard closeHandle(f2)
 
-    if not success: raiseOSError(lastErr, $(path1, path2))
-  else:
-    var a, b: Stat
-    if stat(path1, a) < 0'i32 or stat(path2, b) < 0'i32:
-      raiseOSError(osLastError(), $(path1, path2))
+      if not success: raiseOSError(lastErr, $(path1, path2))
     else:
-      result = a.st_dev == b.st_dev and a.st_ino == b.st_ino
+      var a, b: Stat
+      if stat(path1, a) < 0'i32 or stat(path2, b) < 0'i32:
+        raiseOSError(osLastError(), $(path1, path2))
+      else:
+        result = a.st_dev == b.st_dev and a.st_ino == b.st_ino

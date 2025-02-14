@@ -121,7 +121,7 @@ template main {.dirty.} =
       rVal: R = default(R) # Works fine
       objVal = default(Obj)
 
-    doAssert rVal == 0 # it should be 1
+    doAssert rVal == 1
     doAssert objVal.r == 1
 
   block: # bug #16744
@@ -134,7 +134,7 @@ template main {.dirty.} =
       rVal: R = default(R) # Works fine
       objVal = Obj()
 
-    doAssert rVal == 0 # it should be 1
+    doAssert rVal == 1 # it should be 1
     doAssert objVal.r == 1
 
   block: # bug #3608
@@ -377,7 +377,7 @@ template main {.dirty.} =
         Red, Blue, Yellow
   
     type
-      ObjectVarint3 = object # fixme it doesn't work with static
+      ObjectVarint3 = object
         case kind: Color = Blue
         of Red:
           data1: int = 10
@@ -673,11 +673,11 @@ template main {.dirty.} =
         result = v
 
       proc failed(): Result[int, string] =
-        discard
+        result = default(Result[int, string])
 
       proc calling(): Result[int, string] =
         let _ = ? failed()
-        doAssert false
+        raiseAssert "false"
 
       let r = calling()
       doAssert assigned
@@ -687,6 +687,126 @@ template main {.dirty.} =
         testAssignResult()
     else:
       testAssignResult()
+
+  block: # bug #22123
+    type Thing = object
+      x: float32 = 1
+
+    type ThingWithArray = object
+        arr: array[256, float32]
+        n: float32 = 1
+
+    type Container = ref object
+        thing: array[5, Thing]
+        thing_with_array: array[5, ThingWithArray]
+
+    var foo = new Container
+    doAssert int(foo.thing[0].x) == 1
+
+  block: # bug #22613
+    type
+      K = enum
+        A = "a"
+        B = "b"
+      T = object
+        case kind: K = B
+        of A:
+          a: int
+        of B:
+          b: float
+
+    doAssert T().kind == B
+
+  block: # bug #22926
+    type
+      Direction = enum
+        North
+        South
+        East
+        West
+
+      ArrayObj1 = object
+        list: array[Direction, int]
+
+      ArrayObj2 = object
+        list: array[Direction, int] = [1, 2, 3, 4]
+
+    block:
+      var a: ArrayObj1
+      doAssert a.list[West] == 0
+      var b = default ArrayObj1
+      doAssert b.list[North] == 0
+
+
+    block:
+      var a: ArrayObj2
+      doAssert a.list[West] == 0
+      var b = default ArrayObj2
+      doAssert b.list[North] == 1
+
+  block:
+    type limited_float = range[1.2..20.0]
+    doAssert default(limited_float) == 1.2
+
+
+  block:
+    type
+      range1 = range[1..10]
+      range2 = range[-1..10]
+
+    proc foo =
+      doAssert default(range1) == 1
+      doAssert default(range2) == -1
+
+      let s = default(array[5, range1])
+      doAssert s == [range1 1, 1, 1, 1, 1]
+
+    foo()
+
+  block:
+    type
+      Object = object
+        id: range[1.2..29.3]
+
+    var s = default(Object)
+    doAssert s.id == 1.2
+
+  block: # bug #23943
+    type limited_int = range[1..20]
+    var d: limited_int;
+    doAssert d == 1
+
+  block: # bug #23545
+    proc evaluate(params: int) =
+        discard
+
+    proc evaluate() =
+        discard
+
+    type SearchInfo = object
+      evaluation: proc() = evaluate
+
+    var a = SearchInfo()
+    a.evaluation()
+
+  block: # bug #23770
+    type
+      Enum = enum A, B
+      Object = object
+        case a: Enum
+        of A:
+          integer: int = 200
+        of B:
+          time: string
+      Simple = object
+        v = -1
+      Another = object
+        o = Object(a: A)
+        v: Simple
+
+    let s1 = Object(a: A)
+    let s2 = Another()
+    doAssert s1.integer == 200 and s2.o.integer == 200
 
 
 static: main()

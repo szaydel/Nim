@@ -54,7 +54,7 @@ Please use alternative packages for serialization.
 It is possible to reimplement this module using generics and type traits.
 Please contribute a new implementation.""".}
 
-import streams, typeinfo, json, intsets, tables, unicode
+import std/[streams, typeinfo, json, intsets, tables, unicode]
 
 when defined(nimPreviewSlimSystem):
   import std/[assertions, formatfloat]
@@ -210,7 +210,8 @@ proc loadAny(p: var JsonParser, a: Any, t: var Table[BiggestInt, pointer]) =
       setPointer(a, nil)
       next(p)
     of jsonInt:
-      setPointer(a, t.getOrDefault(p.getInt))
+      var raw = t.getOrDefault(p.getInt)
+      setPointer(a, addr raw)
       next(p)
     of jsonArrayStart:
       next(p)
@@ -272,7 +273,7 @@ proc loadAny(p: var JsonParser, a: Any, t: var Table[BiggestInt, pointer]) =
   of akRange: loadAny(p, a.skipRange, t)
 
 proc loadAny(s: Stream, a: Any, t: var Table[BiggestInt, pointer]) =
-  var p: JsonParser
+  var p: JsonParser = default(JsonParser)
   open(p, s, "unknown file")
   next(p)
   loadAny(p, a, t)
@@ -304,14 +305,14 @@ proc store*[T](s: Stream, data: sink T) =
 
   var stored = initIntSet()
   var d: T
-  when defined(gcArc) or defined(gcOrc):
+  when defined(gcArc) or defined(gcOrc)or defined(gcAtomicArc):
     d = data
   else:
     shallowCopy(d, data)
   storeAny(s, toAny(d), stored)
 
 proc loadVM[T](typ: typedesc[T], x: T): string =
-  discard "the implementation is in the compiler/vmops"
+  raiseAssert "the implementation is in the compiler/vmops"
 
 proc `$$`*[T](x: sink T): string =
   ## Returns a string representation of `x` (serialization, marshalling).
@@ -333,7 +334,7 @@ proc `$$`*[T](x: sink T): string =
   else:
     var stored = initIntSet()
     var d: T
-    when defined(gcArc) or defined(gcOrc):
+    when defined(gcArc) or defined(gcOrc) or defined(gcAtomicArc):
       d = x
     else:
       shallowCopy(d, x)
@@ -342,7 +343,7 @@ proc `$$`*[T](x: sink T): string =
     result = s.data
 
 proc toVM[T](typ: typedesc[T], data: string): T =
-  discard "the implementation is in the compiler/vmops"
+  raiseAssert "the implementation is in the compiler/vmops"
 
 proc to*[T](data: string): T =
   ## Reads data and transforms it to a type `T` (deserialization, unmarshalling).
@@ -362,5 +363,6 @@ proc to*[T](data: string): T =
   when nimvm:
     result = toVM(T, data)
   else:
+    result = default(T)
     var tab = initTable[BiggestInt, pointer]()
     loadAny(newStringStream(data), toAny(result), tab)

@@ -11,8 +11,8 @@
 import
   ast, modules, condsyms,
   options, llstream, lineinfos, vm,
-  vmdef, modulegraphs, idents, os, pathutils,
-  scriptconfig, std/compilesettings
+  vmdef, modulegraphs, idents, pathutils,
+  scriptconfig, std/[compilesettings, tables, os]
 
 import pipelines
 
@@ -40,7 +40,7 @@ proc selectUniqueSymbol*(i: Interpreter; name: string;
   assert i != nil
   assert i.mainModule != nil, "no main module selected"
   let n = getIdent(i.graph.cache, name)
-  var it: ModuleIter
+  var it: ModuleIter = default(ModuleIter)
   var s = initModuleIter(it, i.graph, i.mainModule, n)
   result = nil
   while s != nil:
@@ -78,6 +78,9 @@ proc evalScript*(i: Interpreter; scriptStream: PLLStream = nil) =
   assert i != nil
   assert i.mainModule != nil, "no main module selected"
   initStrTables(i.graph, i.mainModule)
+  i.graph.cacheSeqs.clear()
+  i.graph.cacheCounters.clear()
+  i.graph.cacheTables.clear()
   i.mainModule.ast = nil
 
   let s = if scriptStream != nil: scriptStream

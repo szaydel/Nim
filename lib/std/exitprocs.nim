@@ -9,7 +9,7 @@
 
 ## This module allows adding hooks to program exit.
 
-import locks
+import std/locks
 when defined(js) and not defined(nodejs):
   import std/assertions
 
@@ -22,20 +22,20 @@ type
 
 var
   gFunsLock: Lock
-  gFuns: seq[Fun]
+  gFuns {.cursor.}: seq[Fun] #Intentionally use the cursor to break up the lifetime trace and make it compatible with JS.
 
 initLock(gFunsLock)
 
 when defined(js):
   proc addAtExit(quitProc: proc() {.noconv.}) =
     when defined(nodejs):
-      asm """
+      {.emit: """
         process.on('exit', `quitProc`);
-      """
+      """.}
     elif defined(js):
-      asm """
+      {.emit: """
         window.onbeforeunload = `quitProc`;
-      """
+      """.}
 else:
   proc addAtExit(quitProc: proc() {.noconv.}) {.
     importc: "atexit", header: "<stdlib.h>".}
@@ -69,23 +69,19 @@ proc addExitProc*(cl: proc() {.noconv.}) =
     fun()
     gFuns.add Fun(kind: kNoconv, fun2: cl)
 
-when not defined(nimscript):
+when not defined(nimscript) and (not defined(js) or defined(nodejs)):
   proc getProgramResult*(): int =
     when defined(js) and defined(nodejs):
-      asm """
+      {.emit: """
 `result` = process.exitCode;
-"""
-    elif not defined(js):
-      result = programResult
+""".}
     else:
-      doAssert false
+      result = programResult
 
   proc setProgramResult*(a: int) =
     when defined(js) and defined(nodejs):
-      asm """
+      {.emit: """
 process.exitCode = `a`;
-"""
-    elif not defined(js):
-      programResult = a
+""".}
     else:
-      doAssert false
+      programResult = a

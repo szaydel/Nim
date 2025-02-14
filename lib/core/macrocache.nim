@@ -44,6 +44,9 @@ runnableExamples:
     assert mcCounter.value == 3
 
 
+when defined(nimPreviewSlimSystem):
+  import std/assertions
+
 type
   CacheSeq* = distinct string
     ## Compile-time sequence of `NimNode`s.
@@ -127,6 +130,19 @@ proc `[]`*(s: CacheSeq; i: int): NimNode {.magic: "NcsAt".} =
       mySeq.add(newLit(42))
       assert mySeq[0].intVal == 42
 
+proc `[]`*(s: CacheSeq; i: BackwardsIndex): NimNode =
+  ## Returns the `i`th last value from `s`.
+  runnableExamples:
+    import std/macros
+
+    const mySeq = CacheSeq"backTest"
+    static:
+      mySeq &= newLit(42)
+      mySeq &= newLit(7)
+      assert mySeq[^1].intVal == 7  # Last item
+      assert mySeq[^2].intVal == 42 # Second last item
+  s[s.len - int(i)]
+
 iterator items*(s: CacheSeq): NimNode =
   ## Iterates over each item in `s`.
   runnableExamples:
@@ -194,7 +210,7 @@ proc hasKey*(t: CacheTable; key: string): bool =
       mcTable["foo"] = newEmptyNode()
       # Will now be true since we inserted a value
       assert mcTable.hasKey("foo")
-  discard "Implemented in vmops"
+  raiseAssert "implemented in the vmops"
 
 proc contains*(t: CacheTable; key: string): bool {.inline.} =
   ## Alias of [hasKey][hasKey(CacheTable, string)] for use with the `in` operator.

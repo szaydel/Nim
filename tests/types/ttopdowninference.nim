@@ -290,3 +290,66 @@ block: # bug #21377
     {:}
 
   doAssert b(0) == {:}
+
+block: # bug #22180
+  type A = object
+  proc j() = discard
+
+  let x =
+    if false:
+      (ref A)(nil)
+    else:
+      if false:
+        quit 1
+      else:
+        if true:
+          j()
+          nil  # compiles with (ref A)(nil) here
+        else:
+          (ref A)(nil)
+  doAssert x.isNil
+  
+  let y =
+    case true
+    of false:
+      (ref A)(nil)
+    else:
+      case true
+      of false:
+        quit 1
+      else:
+        case true
+        of true:
+          j()
+          nil  # compiles with (ref A)(nil) here
+        else:
+          (ref A)(nil)
+  doAssert y.isNil
+
+block: # issue #24164, related regression
+  proc foo(x: proc ()) = discard
+  template bar(x: untyped = nil) =
+    foo(x)
+  bar()
+
+block: # bug #24296
+  # Either changing the template to `proc`/`func` or using `$""`, not a string
+  # literal alone, allows any version of Nim 2.x to compile this.
+  template g(): string = ""
+
+  # Alternatively: don't retrieve the string through g(), but directly, also
+  # allows compilation across Nim 2.x versions.
+  const d: cstring = ""
+  const f: cstring = $""
+  const b = cstring g()
+  const m = cstring ""
+  const p = cstring $""
+
+  # But this does not compile across Nim 2.x/devel.
+  const c: cstring = g()
+  let e: cstring = g()
+
+block: # bug #24295
+  template g(_: int): string = ""
+  const c: cstring = 0.g()
+

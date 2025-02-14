@@ -12,29 +12,28 @@
 ##
 ## To unpack raw bytes look at the `streams <streams.html>`_ module.
 ##
-## .. code-block:: nim
-##    :test:
+##   ```nim test
+##   let logs = @["2019-01-10: OK_", "2019-01-11: FAIL_", "2019-01: aaaa"]
+##   var outp: seq[string]
 ##
-##    let logs = @["2019-01-10: OK_", "2019-01-11: FAIL_", "2019-01: aaaa"]
-##    var outp: seq[string]
+##   for log in logs:
+##     var res: string
+##     if parseUntil(log, res, ':') == 10: # YYYY-MM-DD == 10
+##       outp.add(res & " - " & captureBetween(log, ' ', '_'))
+##   doAssert outp == @["2019-01-10 - OK", "2019-01-11 - FAIL"]
+##   ```
 ##
-##    for log in logs:
-##      var res: string
-##      if parseUntil(log, res, ':') == 10: # YYYY-MM-DD == 10
-##        outp.add(res & " - " & captureBetween(log, ' ', '_'))
-##    doAssert outp == @["2019-01-10 - OK", "2019-01-11 - FAIL"]
+##   ```nim test
+##   from std/strutils import Digits, parseInt
 ##
-## .. code-block:: nim
-##    :test:
-##    from std/strutils import Digits, parseInt
-##
-##    let
-##      input1 = "2019 school start"
-##      input2 = "3 years back"
-##      startYear = input1[0 .. skipWhile(input1, Digits)-1] # 2019
-##      yearsBack = input2[0 .. skipWhile(input2, Digits)-1] # 3
-##      examYear = parseInt(startYear) + parseInt(yearsBack)
-##    doAssert "Examination is in " & $examYear == "Examination is in 2022"
+##   let
+##     input1 = "2019 school start"
+##     input2 = "3 years back"
+##     startYear = input1[0 .. skipWhile(input1, Digits)-1] # 2019
+##     yearsBack = input2[0 .. skipWhile(input2, Digits)-1] # 3
+##     examYear = parseInt(startYear) + parseInt(yearsBack)
+##   doAssert "Examination is in " & $examYear == "Examination is in 2022"
+##   ```
 ##
 ## **See also:**
 ## * `strutils module<strutils.html>`_ for combined and identical parsing proc's
@@ -106,6 +105,8 @@ proc parseBin*[T: SomeInteger](s: openArray[char], number: var T, maxLen = 0): i
   if foundDigit:
     number = output
     result = i
+  else:
+    result = 0
 
 proc parseOct*[T: SomeInteger](s: openArray[char], number: var T, maxLen = 0): int {.noSideEffect.} =
   ## Parses an octal number and stores its value in ``number``.
@@ -152,6 +153,8 @@ proc parseOct*[T: SomeInteger](s: openArray[char], number: var T, maxLen = 0): i
   if foundDigit:
     number = output
     result = i
+  else:
+    result = 0
 
 proc parseHex*[T: SomeInteger](s: openArray[char], number: var T, maxLen = 0): int {.noSideEffect.} =
   ## Parses a hexadecimal number and stores its value in ``number``.
@@ -183,6 +186,7 @@ proc parseHex*[T: SomeInteger](s: openArray[char], number: var T, maxLen = 0): i
     var num64: int64
     doAssert parseHex("4E69ED4E69ED", num64) == 12
     doAssert num64 == 86216859871725
+  result = 0
   var i = 0
   var output = T(0)
   var foundDigit = false
@@ -225,6 +229,8 @@ proc parseIdent*(s: openArray[char], ident: var string): int =
     while i < s.len and s[i] in IdentChars: inc(i)
     ident = substr(s.toOpenArray(0, i-1))
     result = i
+  else:
+    result = 0
 
 proc parseIdent*(s: openArray[char]): string =
   ## Parses an identifier and returns it or an empty string in
@@ -234,12 +240,13 @@ proc parseIdent*(s: openArray[char]): string =
     doAssert parseIdent("Hello World", 1) == "ello"
     doAssert parseIdent("Hello World", 5) == ""
     doAssert parseIdent("Hello World", 6) == "World"
-  result = ""
   var i = 0
   if i < s.len and s[i] in IdentStartChars:
     inc(i)
     while i < s.len and s[i] in IdentChars: inc(i)
     result = substr(s.toOpenArray(0, i - 1))
+  else:
+    result = ""
 
 proc parseChar*(s: openArray[char], c: var char): int =
   ## Parses a single character, stores it in `c` and returns 1.
@@ -254,6 +261,8 @@ proc parseChar*(s: openArray[char], c: var char): int =
   if s.len > 0:
     c = s[0]
     result = 1
+  else:
+    result = 0
 
 proc skipWhitespace*(s: openArray[char]): int {.inline.} =
   ## Skips the whitespace starting at ``s[start]``. Returns the number of
@@ -417,7 +426,7 @@ proc captureBetween*(s: openArray[char], first: char, second = '\0'): string =
   result = ""
   discard parseUntil(s.toOpenArray(i, s.high), result, if second == '\0': first else: second)
 
-proc integerOutOfRangeError() {.noinline.} =
+proc integerOutOfRangeError() {.noinline, noreturn.} =
   raise newException(ValueError, "Parsed integer outside of valid range")
 
 # See #6752
@@ -448,6 +457,8 @@ proc rawParseInt(s: openArray[char], b: var BiggestInt): int =
     else:
       b = b * sign
       result = i
+  else:
+    result = 0
 
 when defined(js):
   {.pop.} # overflowChecks: off
@@ -461,6 +472,8 @@ proc parseBiggestInt*(s: openArray[char], number: var BiggestInt): int {.
     var res: BiggestInt
     doAssert parseBiggestInt("9223372036854775807", res) == 19
     doAssert res == 9223372036854775807
+    doAssert parseBiggestInt("-2024_05_09", res) == 11
+    doAssert res == -20240509
   var res = BiggestInt(0)
   # use 'res' for exception safety (don't write to 'number' in case of an
   # overflow exception):
@@ -475,10 +488,8 @@ proc parseInt*(s: openArray[char], number: var int): int {.
   ## `ValueError` is raised if the parsed integer is out of the valid range.
   runnableExamples:
     var res: int
-    doAssert parseInt("2019", res, 0) == 4
-    doAssert res == 2019
-    doAssert parseInt("2019", res, 2) == 2
-    doAssert res == 19
+    doAssert parseInt("-2024_05_02", res) == 11
+    doAssert res == -20240502
   var res = BiggestInt(0)
   result = parseBiggestInt(s, res)
   when sizeof(int) <= 4:
@@ -510,11 +521,12 @@ proc parseSaturatedNatural*(s: openArray[char], b: var int): int {.
       inc(i)
       while i < s.len and s[i] == '_': inc(i) # underscores are allowed and ignored
     result = i
+  else:
+    result = 0
 
 proc rawParseUInt(s: openArray[char], b: var BiggestUInt): int =
   var
     res = 0.BiggestUInt
-    prev = 0.BiggestUInt
     i = 0
   if i < s.len - 1 and s[i] == '-' and s[i + 1] in {'0'..'9'}:
     integerOutOfRangeError()
@@ -522,14 +534,19 @@ proc rawParseUInt(s: openArray[char], b: var BiggestUInt): int =
   if i < s.len and s[i] in {'0'..'9'}:
     b = 0
     while i < s.len and s[i] in {'0'..'9'}:
-      prev = res
-      res = res * 10 + (ord(s[i]) - ord('0')).BiggestUInt
+      if res > BiggestUInt.high div 10: # Highest value that you can multiply 10 without overflow
+        integerOutOfRangeError()
+      res = res * 10
+      let prev = res
+      res += (ord(s[i]) - ord('0')).BiggestUInt
       if prev > res:
         integerOutOfRangeError()
       inc(i)
       while i < s.len and s[i] == '_': inc(i) # underscores are allowed and ignored
     b = res
     result = i
+  else:
+    result = 0
 
 proc parseBiggestUInt*(s: openArray[char], number: var BiggestUInt): int {.
   rtl, extern: "npuParseBiggestUInt", noSideEffect, raises: [ValueError].} =
@@ -632,7 +649,7 @@ func parseSize*(s: openArray[char], size: var int64, alwaysBin=false): int =
   const scaleB = [1.0, 1024, 1048576, 1073741824, 1099511627776.0,  # 2^(10*idx)
                   1125899906842624.0, 1152921504606846976.0,        # ldexp?
                   1.180591620717411303424e21, 1.208925819614629174706176e24]
-  var number: float
+  var number: float = 0.0
   var scale = 1.0
   result = parseFloat(s, number)
   if number < 0:                        # While parseFloat accepts negatives ..
@@ -993,6 +1010,10 @@ proc parseBiggestInt*(s: string, number: var BiggestInt, start = 0): int {.noSid
     var res: BiggestInt
     doAssert parseBiggestInt("9223372036854775807", res, 0) == 19
     doAssert res == 9223372036854775807
+    doAssert parseBiggestInt("-2024_05_09", res) == 11
+    doAssert res == -20240509
+    doAssert parseBiggestInt("-2024_05_02", res, 7) == 4
+    doAssert res == 502
   parseBiggestInt(s.toOpenArray(start, s.high), number)
 
 proc parseInt*(s: string, number: var int, start = 0): int {.noSideEffect, raises: [ValueError].} =
@@ -1001,10 +1022,10 @@ proc parseInt*(s: string, number: var int, start = 0): int {.noSideEffect, raise
   ## `ValueError` is raised if the parsed integer is out of the valid range.
   runnableExamples:
     var res: int
-    doAssert parseInt("2019", res, 0) == 4
-    doAssert res == 2019
-    doAssert parseInt("2019", res, 2) == 2
-    doAssert res == 19
+    doAssert parseInt("-2024_05_02", res) == 11
+    doAssert res == -20240502
+    doAssert parseInt("-2024_05_02", res, 7) == 4
+    doAssert res == 502
   parseInt(s.toOpenArray(start, s.high), number)
 
 

@@ -93,6 +93,8 @@ type
     nnkFuncDef,
     nnkTupleConstr,
     nnkError,  ## erroneous AST node
+    nnkModuleRef, nnkReplayAction, nnkNilRodNode ## internal IC nodes
+    nnkOpenSym
 
   NimNodeKinds* = set[NimNodeKind]
   NimTypeKind* = enum  # some types are no longer used, see ast.nim
@@ -208,7 +210,7 @@ template `or`*(x, y: NimNode): NimNode =
   ## Evaluate `x` and when it is not an empty node, return
   ## it. Otherwise evaluate to `y`. Can be used to chain several
   ## expressions to get the first expression that is not empty.
-  ##   ```
+  ##   ```nim
   ##   let node = mightBeEmpty() or mightAlsoBeEmpty() or fallbackNode
   ##   ```
 
@@ -277,7 +279,7 @@ when (NimMajor, NimMinor, NimPatch) >= (1, 3, 5) or defined(nimSymImplTransform)
     ## note that code transformations are implementation dependent and subject to change.
     ## See an example in `tests/macros/tmacros_various.nim`.
 
-proc owner*(sym: NimNode): NimNode {.magic: "SymOwner", noSideEffect.}
+proc owner*(sym: NimNode): NimNode {.magic: "SymOwner", noSideEffect, deprecated.}
   ## Accepts a node of kind `nnkSym` and returns its owner's symbol.
   ## The meaning of 'owner' depends on `sym`'s `NimSymKind` and declaration
   ## context. For top level declarations this is an `nskModule` symbol,
@@ -347,8 +349,7 @@ proc getTypeImpl*(n: NimNode): NimNode {.magic: "NGetType", noSideEffect.} =
       newLit(x.getTypeImpl.repr)
     let t = """
 object
-  arr: array[0 .. 3, float32]
-"""
+  arr: array[0 .. 3, float32]"""
     doAssert(dumpTypeImpl(a) == t)
     doAssert(dumpTypeImpl(b) == t)
     doAssert(dumpTypeImpl(c) == t)
@@ -364,7 +365,7 @@ proc symBodyHash*(s: NimNode): string {.noSideEffect.} =
   ## and owning module, but also implementation body. All procs/variables used in
   ## the implementation of this symbol are hashed recursively as well, including
   ## magics from system module.
-  discard
+  raiseAssert "implemented in the vmops"
 
 proc getTypeImpl*(n: typedesc): NimNode {.magic: "NGetType", noSideEffect.}
   ## Version of `getTypeImpl` which takes a `typedesc`.
@@ -427,7 +428,12 @@ proc copyNimTree*(n: NimNode): NimNode {.magic: "NCopyNimTree", noSideEffect.} =
       let x = 12
       echo x
 
-proc error*(msg: string, n: NimNode = nil) {.magic: "NError", benign.}
+when defined(nimHasNoReturnError):
+  {.pragma: errorNoReturn, noreturn.}
+else:
+  {.pragma: errorNoReturn.}
+
+proc error*(msg: string, n: NimNode = nil) {.magic: "NError", benign, errorNoReturn.}
   ## Writes an error message at compile time. The optional `n: NimNode`
   ## parameter is used as the source for file and line number information in
   ## the compilation error message.
@@ -590,7 +596,7 @@ proc getAst*(macroOrTemplate: untyped): NimNode {.magic: "ExpandToAst", noSideEf
   ## Obtains the AST nodes returned from a macro or template invocation.
   ## See also `genasts.genAst`.
   ## Example:
-  ##   ```
+  ##   ```nim
   ##   macro FooMacro() =
   ##     var ast = getAst(BarTemplate())
   ##   ```
@@ -1049,7 +1055,7 @@ macro dumpTree*(s: untyped): untyped = echo s.treeRepr
   ## a certain expression/statement.
   ##
   ## For example:
-  ##   ```
+  ##   ```nim
   ##   dumpTree:
   ##     echo "Hello, World!"
   ##   ```
@@ -1073,7 +1079,7 @@ macro dumpLisp*(s: untyped): untyped = echo s.lispRepr(indented = true)
   ## a certain expression/statement.
   ##
   ## For example:
-  ##   ```
+  ##   ```nim
   ##   dumpLisp:
   ##     echo "Hello, World!"
   ##   ```
@@ -1096,7 +1102,7 @@ macro dumpAstGen*(s: untyped): untyped = echo s.astGenRepr
   ## outputs and then copying the snippets into the macro for modification.
   ##
   ## For example:
-  ##   ```
+  ##   ```nim
   ##   dumpAstGen:
   ##     echo "Hello, World!"
   ##   ```
@@ -1179,7 +1185,7 @@ proc newIdentDefs*(name, kind: NimNode;
   ## `let` or `var` blocks may have an empty `kind` node if the
   ## identifier is being assigned a value. Example:
   ##
-  ##   ```
+  ##   ```nim
   ##   var varSection = newNimNode(nnkVarSection).add(
   ##     newIdentDefs(ident("a"), ident("string")),
   ##     newIdentDefs(ident("b"), newEmptyNode(), newLit(3)))
@@ -1190,7 +1196,7 @@ proc newIdentDefs*(name, kind: NimNode;
   ##
   ## If you need to create multiple identifiers you need to use the lower level
   ## `newNimNode`:
-  ##   ```
+  ##   ```nim
   ##   result = newNimNode(nnkIdentDefs).add(
   ##     ident("a"), ident("b"), ident("c"), ident("string"),
   ##       newStrLitNode("Hello"))
@@ -1241,7 +1247,7 @@ proc newProc*(name = newEmptyNode();
 
 proc newIfStmt*(branches: varargs[tuple[cond, body: NimNode]]): NimNode =
   ## Constructor for `if` statements.
-  ##   ```
+  ##   ```nim
   ##   newIfStmt(
   ##     (Ident, StmtList),
   ##     ...
@@ -1258,7 +1264,7 @@ proc newEnum*(name: NimNode, fields: openArray[NimNode],
 
   ## Creates a new enum. `name` must be an ident. Fields are allowed to be
   ## either idents or EnumFieldDef:
-  ##   ```
+  ##   ```nim
   ##   newEnum(
   ##     name    = ident("Colors"),
   ##     fields  = [ident("Blue"), ident("Red")],
@@ -1321,7 +1327,7 @@ proc `name=`*(someProc: NimNode; val: NimNode) =
   else: someProc[0] = val
 
 proc params*(someProc: NimNode): NimNode =
-  if someProc.kind == nnkProcTy:
+  if someProc.kind in {nnkProcTy, nnkIteratorTy}:
     someProc[0]
   else:
     someProc.expectRoutine
@@ -1329,7 +1335,7 @@ proc params*(someProc: NimNode): NimNode =
 
 proc `params=`* (someProc: NimNode; params: NimNode) =
   expectKind(params, nnkFormalParams)
-  if someProc.kind == nnkProcTy:
+  if someProc.kind in {nnkProcTy, nnkIteratorTy}:
     someProc[0] = params
   else:
     someProc.expectRoutine
@@ -1338,7 +1344,7 @@ proc `params=`* (someProc: NimNode; params: NimNode) =
 proc pragma*(someProc: NimNode): NimNode =
   ## Get the pragma of a proc type.
   ## These will be expanded.
-  if someProc.kind == nnkProcTy:
+  if someProc.kind in {nnkProcTy, nnkIteratorTy}:
     result = someProc[1]
   else:
     someProc.expectRoutine
@@ -1346,7 +1352,7 @@ proc pragma*(someProc: NimNode): NimNode =
 proc `pragma=`*(someProc: NimNode; val: NimNode) =
   ## Set the pragma of a proc type.
   expectKind(val, {nnkEmpty, nnkPragma})
-  if someProc.kind == nnkProcTy:
+  if someProc.kind in {nnkProcTy, nnkIteratorTy}:
     someProc[1] = val
   else:
     someProc.expectRoutine
@@ -1403,7 +1409,7 @@ proc `$`*(node: NimNode): string =
     result = node.basename.strVal & "*"
   of nnkStrLit..nnkTripleStrLit, nnkCommentStmt, nnkSym, nnkIdent:
     result = node.strVal
-  of nnkOpenSymChoice, nnkClosedSymChoice:
+  of nnkOpenSymChoice, nnkClosedSymChoice, nnkOpenSym:
     result = $node[0]
   of nnkAccQuoted:
     result = ""
@@ -1429,12 +1435,12 @@ iterator children*(n: NimNode): NimNode {.inline.} =
 
 template findChild*(n: NimNode; cond: untyped): NimNode {.dirty.} =
   ## Find the first child node matching condition (or nil).
-  ##   ```
+  ##   ```nim
   ##   var res = findChild(n, it.kind == nnkPostfix and
   ##                          it.basename.ident == ident"foo")
   ##   ```
   block:
-    var res: NimNode
+    var res: NimNode = nil
     for it in n.children:
       if cond:
         res = it
@@ -1502,6 +1508,7 @@ proc expectIdent*(n: NimNode, name: string) {.since: (1,1).} =
 
 proc hasArgOfName*(params: NimNode; name: string): bool =
   ## Search `nnkFormalParams` for an argument.
+  result = false
   expectKind(params, nnkFormalParams)
   for i in 1..<params.len:
     for j in 0..<params[i].len-2:
@@ -1536,7 +1543,7 @@ macro expandMacros*(body: typed): untyped =
   ##
   ## For instance,
   ##
-  ##   ```
+  ##   ```nim
   ##   import std/[sugar, macros]
   ##
   ##   let
@@ -1569,6 +1576,7 @@ proc extractTypeImpl(n: NimNode): NimNode =
   else: error("Invalid node to retrieve type implementation of: " & $n.kind)
 
 proc customPragmaNode(n: NimNode): NimNode =
+  result = nil
   expectKind(n, {nnkSym, nnkDotExpr, nnkBracketExpr, nnkTypeOfExpr, nnkType, nnkCheckedFieldExpr})
   let
     typ = n.getTypeInst()
@@ -1652,7 +1660,7 @@ macro hasCustomPragma*(n: typed, cp: typed{nkSym}): untyped =
   ##
   ## See also `getCustomPragmaVal`_.
   ##
-  ##   ```
+  ##   ```nim
   ##   template myAttr() {.pragma.}
   ##   type
   ##     MyObj = object
@@ -1677,7 +1685,7 @@ macro getCustomPragmaVal*(n: typed, cp: typed{nkSym}): untyped =
   ##
   ## See also `hasCustomPragma`_.
   ##
-  ##   ```
+  ##   ```nim
   ##   template serializationKey(key: string) {.pragma.}
   ##   type
   ##     MyObj {.serializationKey: "mo".} = object
@@ -1724,7 +1732,7 @@ macro unpackVarargs*(callee: untyped; args: varargs[untyped]): untyped =
   for i in 0 ..< args.len:
     result.add args[i]
 
-proc getProjectPath*(): string = discard
+proc getProjectPath*(): string = raiseAssert "implemented in the vmops"
   ## Returns the path to the currently compiling project.
   ##
   ## This is not to be confused with `system.currentSourcePath <system.html#currentSourcePath.t>`_
@@ -1767,13 +1775,14 @@ proc getOffset*(arg: NimNode): int {.magic: "NSizeOf", noSideEffect.} =
 
 proc isExported*(n: NimNode): bool {.noSideEffect.} =
   ## Returns whether the symbol is exported or not.
+  raiseAssert "implemented in the vmops"
 
 proc extractDocCommentsAndRunnables*(n: NimNode): NimNode =
   ## returns a `nnkStmtList` containing the top-level doc comments and
   ## runnableExamples in `a`, stopping at the first child that is neither.
   ## Example:
   ##
-  ##   ```
+  ##   ```nim
   ##   import std/macros
   ##   macro transf(a): untyped =
   ##     result = quote do:

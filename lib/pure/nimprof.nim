@@ -20,7 +20,7 @@ when not defined(profiler) and not defined(memProfiler):
 # We don't want to profile the profiling code ...
 {.push profiler: off.}
 
-import hashes, algorithm, strutils, tables, sets
+import std/[hashes, algorithm, strutils, tables, sets]
 
 when defined(nimPreviewSlimSystem):
   import std/[syncio, sysatomics]
@@ -54,7 +54,7 @@ proc `==`(a, b: StackTrace): bool =
 # However a chain length of over 3000 is suspicious...
 var
   profileData: ProfileData
-  emptySlots = profileData.len * 3 div 2
+  emptySlots = profileData.len div 2 + profileData.len
   maxChainLen = 0
   totalCalls = 0
 
@@ -69,7 +69,7 @@ when not defined(memProfiler):
     else: interval = intervalInUs * 1000 - tickCountCorrection
 
 when withThreads:
-  import locks
+  import std/locks
   var
     profilingLock: Lock
 
@@ -143,6 +143,7 @@ else:
                  # avoid calling 'getTicks' too frequently
 
   proc requestedHook(): bool {.nimcall.} =
+    result = false
     if interval == 0: result = true
     elif gTicker == 0:
       gTicker = 500
@@ -174,7 +175,7 @@ proc writeProfile() {.noconv.} =
     system.profilerHook = nil
   const filename = "profile_results.txt"
   echo "writing " & filename & "..."
-  var f: File
+  var f: File = default(File)
   if open(f, filename, fmWrite):
     sort(profileData, cmpEntries)
     writeLine(f, "total executions of each stack trace:")

@@ -19,7 +19,7 @@ include system/inclrtl
 
 when defined(nimPreviewSlimSystem):
   import std/widestrs
-  
+
 when defined(nodejs):
   from std/private/oscommon import ReadDirEffect
 
@@ -30,11 +30,9 @@ const weirdTarget = defined(nimscript) or defined(js)
 when weirdTarget:
   discard
 elif defined(windows):
-  import winlean
+  import std/winlean
 elif defined(posix):
-  import posix
-else:
-  {.error: "The cmdline module has not been implemented for the target platform.".}
+  import std/posix
 
 
 # Needed by windows in order to obtain the command line for targets
@@ -51,7 +49,7 @@ proc parseCmdLine*(c: string): seq[string] {.
   ## `parseopt module <parseopt.html>`_.
   ##
   ## On Windows, it uses the `following parsing rules
-  ## <http://msdn.microsoft.com/en-us/library/17w5ykft.aspx>`_:
+  ## <https://msdn.microsoft.com/en-us/library/17w5ykft.aspx>`_:
   ##
   ## * Arguments are delimited by white space, which is either a space or a tab.
   ## * The caret character (^) is not recognized as an escape character or
@@ -138,7 +136,7 @@ proc parseCmdLine*(c: string): seq[string] {.
         while i < c.len and c[i] > ' ':
           add(a, c[i])
           inc(i)
-    add(result, a)
+    add(result, move a)
 
 when defined(nimdoc):
   # Common forward declaration docstring block for parameter retrieval procs.
@@ -163,11 +161,12 @@ when defined(nimdoc):
     ##
     ## **Examples:**
     ##
-    ## .. code-block:: nim
+    ##   ```nim
     ##   when declared(paramCount):
     ##     # Use paramCount() here
     ##   else:
     ##     # Do something else!
+    ##   ```
 
   proc paramStr*(i: int): string {.tags: [ReadIOEffect].} =
     ## Returns the `i`-th `command line argument`:idx: given to the application.
@@ -180,7 +179,7 @@ when defined(nimdoc):
     ## Similarly to `argv`:idx: in C,
     ## it is possible to call `paramStr(0)` but this will return OS specific
     ## contents (usually the name of the invoked executable). You should avoid
-    ## this and call `getAppFilename()`_ instead.
+    ## this and call `getAppFilename() <os.html#getAppFilename>`_ instead.
     ##
     ## **Availability**: When generating a dynamic library (see `--app:lib`) on
     ## Posix this proc is not defined.
@@ -191,15 +190,16 @@ when defined(nimdoc):
     ## * `parseCmdLine proc`_
     ## * `paramCount proc`_
     ## * `commandLineParams proc`_
-    ## * `getAppFilename proc`_
+    ## * `getAppFilename proc <os.html#getAppFilename>`_
     ##
     ## **Examples:**
     ##
-    ## .. code-block:: nim
+    ##   ```nim
     ##   when declared(paramStr):
     ##     # Use paramStr() here
     ##   else:
     ##     # Do something else!
+    ##   ```
 
 elif defined(nimscript): discard
 elif defined(nodejs):
@@ -280,7 +280,7 @@ when declared(paramCount) or defined(nimdoc):
     ## Convenience proc which returns the command line parameters.
     ##
     ## This returns **only** the parameters. If you want to get the application
-    ## executable filename, call `getAppFilename()`_.
+    ## executable filename, call `getAppFilename() <os.html#getAppFilename>`_.
     ##
     ## **Availability**: On Posix there is no portable way to get the command
     ## line from a DLL and thus the proc isn't defined in this environment. You
@@ -292,15 +292,16 @@ when declared(paramCount) or defined(nimdoc):
     ## * `parseCmdLine proc`_
     ## * `paramCount proc`_
     ## * `paramStr proc`_
-    ## * `getAppFilename proc`_
+    ## * `getAppFilename proc <os.html#getAppFilename>`_
     ##
     ## **Examples:**
     ##
-    ## .. code-block:: nim
+    ##   ```nim
     ##   when declared(commandLineParams):
     ##     # Use commandLineParams() here
     ##   else:
     ##     # Do something else!
+    ##   ```
     result = @[]
     for i in 1..paramCount():
       result.add(paramStr(i))

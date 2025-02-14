@@ -1,6 +1,7 @@
 discard """
   targets: "c cpp"
   joinable: false
+  disabled: osx
 """
 
 #[
@@ -12,6 +13,10 @@ xxx test all tests/untestable/* here, possibly with adjustments to make running 
 
 import std/[strformat,os,unittest,compilesettings]
 import stdtest/specialpaths
+
+
+from stdtest/testutils import disableSSLTesting
+
 
 const
   nim = getCurrentCompilerExe()
@@ -28,4 +33,5 @@ proc main =
   block: # SSL certificate check integration tests
     runCmd fmt"{nim} r {options} -d:ssl --threads:on --mm:refc {testsDir}/untestable/thttpclient_ssl_remotenetwork.nim"
 
-main()
+when not disableSSLTesting():
+  main()

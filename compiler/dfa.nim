@@ -22,8 +22,9 @@
 ## "A Graph–Free Approach to Data–Flow Analysis" by Markus Mohnen.
 ## https://link.springer.com/content/pdf/10.1007/3-540-45937-5_6.pdf
 
-import ast, intsets, lineinfos, renderer, aliasanalysis
+import ast, lineinfos, renderer, aliasanalysis
 import std/private/asciitables
+import std/intsets
 
 when defined(nimPreviewSlimSystem):
   import std/assertions
@@ -45,10 +46,10 @@ type
     case isTryBlock: bool
     of false:
       label: PSym
-      breakFixups: seq[(TPosition, seq[PNode])] #Contains the gotos for the breaks along with their pending finales
+      breakFixups: seq[(TPosition, seq[PNode])] # Contains the gotos for the breaks along with their pending finales
     of true:
       finale: PNode
-      raiseFixups: seq[TPosition] #Contains the gotos for the raises
+      raiseFixups: seq[TPosition] # Contains the gotos for the raises
 
   Con = object
     code: ControlFlowGraph
@@ -60,6 +61,7 @@ type
 proc codeListing(c: ControlFlowGraph, start = 0; last = -1): string =
   # for debugging purposes
   # first iteration: compute all necessary labels:
+  result = ""
   var jumpTargets = initIntSet()
   let last = if last < 0: c.len-1 else: min(last, c.len-1)
   for i in start..last:
@@ -111,7 +113,7 @@ proc patch(c: var Con, p: TPosition) =
 proc gen(c: var Con; n: PNode)
 
 proc popBlock(c: var Con; oldLen: int) =
-  var exits: seq[TPosition]
+  var exits: seq[TPosition] = @[]
   exits.add c.gotoI()
   for f in c.blocks[oldLen].breakFixups:
     c.patch(f[0])
@@ -127,10 +129,6 @@ template withBlock(labl: PSym; body: untyped) =
   c.blocks.add TBlock(isTryBlock: false, label: labl)
   body
   popBlock(c, oldLen)
-
-proc isTrue(n: PNode): bool =
-  n.kind == nkSym and n.sym.kind == skEnumField and n.sym.position != 0 or
-    n.kind == nkIntLit and n.intVal != 0
 
 template forkT(body) =
   let lab1 = c.forkI()
@@ -183,14 +181,6 @@ proc genIf(c: var Con, n: PNode) =
     goto Lend3
   L3:
     D
-    goto Lend3 # not eliminated to simplify the join generation
-  Lend3:
-    join F3
-  Lend2:
-    join F2
-  Lend:
-    join F1
-
   ]#
   var endings: seq[TPosition] = @[]
   let oldInteresting = c.interestingInstructions
@@ -215,7 +205,6 @@ proc genAndOr(c: var Con; n: PNode) =
   #   fork lab1
   #   asgn dest, b
   # lab1:
-  #   join F1
   c.gen(n[1])
   forkT:
     c.gen(n[2])
@@ -263,8 +252,9 @@ proc genBreakOrRaiseAux(c: var Con, i: int, n: PNode) =
   if c.blocks[i].isTryBlock:
     c.blocks[i].raiseFixups.add lab1
   else:
-    var trailingFinales: seq[PNode]
-    if c.inTryStmt > 0: #Ok, we are in a try, lets see which (if any) try's we break out from:
+    var trailingFinales: seq[PNode] = @[]
+    if c.inTryStmt > 0:
+      # Ok, we are in a try, lets see which (if any) try's we break out from:
       for b in countdown(c.blocks.high, i):
         if c.blocks[b].isTryBlock:
           trailingFinales.add c.blocks[b].finale
@@ -325,7 +315,7 @@ proc genRaise(c: var Con; n: PNode) =
       if c.blocks[i].isTryBlock:
         genBreakOrRaiseAux(c, i, n)
         return
-    assert false #Unreachable
+    assert false # Unreachable
   else:
     genNoReturn(c)
 
@@ -381,16 +371,16 @@ proc genCall(c: var Con; n: PNode) =
   if t != nil: t = t.skipTypes(abstractInst)
   for i in 1..<n.len:
     gen(c, n[i])
-    if t != nil and i < t.len and isOutParam(t[i]):
+    if t != nil and i < t.signatureLen and isOutParam(t[i]):
       # Pass by 'out' is a 'must def'. Good enough for a move optimizer.
       genDef(c, n[i])
   # every call can potentially raise:
-  if false: # c.inTryStmt > 0 and canRaiseConservative(n[0]):
+  if c.inTryStmt > 0 and canRaiseConservative(n[0]):
+    inc c.interestingInstructions
     # we generate the instruction sequence:
     # fork lab1
     # goto exceptionHandler (except or finally)
     # lab1:
-    # join F1
     forkT:
       for i in countdown(c.blocks.high, 0):
         if c.blocks[i].isTryBlock:
@@ -467,7 +457,7 @@ proc gen(c: var Con; n: PNode) =
   of nkConv, nkExprColonExpr, nkExprEqExpr, nkCast, PathKinds1:
     gen(c, n[1])
   of nkVarSection, nkLetSection: genVarSection(c, n)
-  of nkDefer: doAssert false, "dfa construction pass requires the elimination of 'defer'"
+  of nkDefer: raiseAssert "dfa construction pass requires the elimination of 'defer'"
   else: discard
 
 when false:

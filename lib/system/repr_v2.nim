@@ -38,9 +38,10 @@ proc repr*(x: char): string {.noSideEffect, raises: [].} =
   ## repr for a character argument. Returns `x`
   ## converted to an escaped string.
   ##
-  ## .. code-block:: Nim
+  ##   ```Nim
   ##   assert repr('c') == "'c'"
-  result.add '\''
+  ##   ```
+  result = "'"
   # Elides string creations if not needed
   if x in {'\\', '\0'..'\31', '\127'..'\255'}:
     result.add '\\'
@@ -53,7 +54,7 @@ proc repr*(x: char): string {.noSideEffect, raises: [].} =
 proc repr*(x: string | cstring): string {.noSideEffect, raises: [].} =
   ## repr for a string argument. Returns `x`
   ## converted to a quoted and escaped string.
-  result.add '\"'
+  result = "\""
   for i in 0..<x.len:
     if x[i] in {'"', '\\', '\0'..'\31', '\127'..'\255'}:
       result.add '\\'
@@ -98,7 +99,7 @@ proc repr*(p: proc | iterator {.closure.}): string =
   ## repr of a proc as its address
   repr(cast[ptr pointer](unsafeAddr p)[])
 
-template repr*[T: distinct|range](x: T): string =
+template repr*[T: distinct|(range and not enum)](x: T): string =
   when T is range: # add a branch to handle range
     repr(rangeBase(typeof(x))(x))
   elif T is distinct:
@@ -132,13 +133,15 @@ proc reprObject[T: tuple|object](res: var string, x: T) {.noSideEffect, raises: 
 proc repr*[T: tuple|object](x: T): string {.noSideEffect, raises: [].} =
   ## Generic `repr` operator for tuples that is lifted from the components
   ## of `x`. Example:
-  ##
-  ## .. code-block:: Nim
+  ##   ```Nim
   ##   $(23, 45) == "(23, 45)"
   ##   $(a: 23, b: 45) == "(a: 23, b: 45)"
   ##   $() == "()"
+  ##   ```
   when T is object:
     result = $typeof(x)
+  else:
+    result = ""
   reprObject(result, x)
 
 proc repr*[T](x: ref T | ptr T): string {.noSideEffect, raises: [].} =
@@ -164,28 +167,18 @@ proc collectionToRepr[T](x: T, prefix, separator, suffix: string): string {.noSi
 proc repr*[T](x: set[T]): string =
   ## Generic `repr` operator for sets that is lifted from the components
   ## of `x`. Example:
-  ##
-  ## .. code-block:: Nim
+  ##   ```Nim
   ##   ${23, 45} == "{23, 45}"
+  ##   ```
   collectionToRepr(x, "{", ", ", "}")
 
 proc repr*[T](x: seq[T]): string =
   ## Generic `repr` operator for seqs that is lifted from the components
   ## of `x`. Example:
-  ##
-  ## .. code-block:: Nim
+  ##   ```Nim
   ##   $(@[23, 45]) == "@[23, 45]"
+  ##   ```
   collectionToRepr(x, "@[", ", ", "]")
-
-proc repr*[T, U](x: HSlice[T, U]): string =
-  ## Generic `repr` operator for slices that is lifted from the components
-  ## of `x`. Example:
-  ##
-  ## .. code-block:: Nim
-  ##  $(1 .. 5) == "1 .. 5"
-  result = repr(x.a)
-  result.add(" .. ")
-  result.add(repr(x.b))
 
 proc repr*[T, IDX](x: array[IDX, T]): string =
   ## Generic `repr` operator for arrays that is lifted from the components.
@@ -194,9 +187,9 @@ proc repr*[T, IDX](x: array[IDX, T]): string =
 proc repr*[T](x: openArray[T]): string =
   ## Generic `repr` operator for openarrays that is lifted from the components
   ## of `x`. Example:
-  ##
-  ## .. code-block:: Nim
+  ##   ```Nim
   ##   $(@[23, 45].toOpenArray(0, 1)) == "[23, 45]"
+  ##   ```
   collectionToRepr(x, "[", ", ", "]")
 
 proc repr*[T](x: UncheckedArray[T]): string =

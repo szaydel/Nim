@@ -1,5 +1,5 @@
 discard """
-  matrix: "--mm:refc; --mm:orc; --backend:cpp; --backend:js --jsbigint64:off; --backend:js --jsbigint64:on"
+  matrix: "--mm:refc; --mm:orc; --backend:cpp; --backend:js --jsbigint64:off -d:nimStringHash2; --backend:js --jsbigint64:on"
 """
 
 import std/strutils
@@ -53,6 +53,15 @@ template main() =
     doAssert s.split(maxsplit = 4) == @["", "this", "is", "an", "example  "]
     doAssert s.split(' ', maxsplit = 1) == @["", "this is an example  "]
     doAssert s.split(" ", maxsplit = 4) == @["", "this", "is", "an", "example  "]
+    # Empty string:
+    doAssert "".split() == @[""]
+    doAssert "".split(" ") == @[""]
+    doAssert "".split({' '}) == @[""]
+    # Empty separators:
+    doAssert "".split({}) == @[""]
+    doAssert "".split("") == @[""]
+    doAssert s.split({}) == @[s]
+    doAssert s.split("") == @[s]
 
   block: # splitLines
     let fixture = "a\nb\rc\r\nd"
@@ -63,12 +72,21 @@ template main() =
   block: # rsplit
     doAssert rsplit("foo bar", seps = Whitespace) == @["foo", "bar"]
     doAssert rsplit(" foo bar", seps = Whitespace, maxsplit = 1) == @[" foo", "bar"]
-    doAssert rsplit(" foo bar ", seps = Whitespace, maxsplit = 1) == @[
-        " foo bar", ""]
+    doAssert rsplit(" foo bar ", seps = Whitespace, maxsplit = 1) == @[" foo bar", ""]
     doAssert rsplit(":foo:bar", sep = ':') == @["", "foo", "bar"]
     doAssert rsplit(":foo:bar", sep = ':', maxsplit = 2) == @["", "foo", "bar"]
     doAssert rsplit(":foo:bar", sep = ':', maxsplit = 3) == @["", "foo", "bar"]
     doAssert rsplit("foothebar", sep = "the") == @["foo", "bar"]
+    # Empty string:
+    doAssert "".rsplit() == @[""]
+    doAssert "".rsplit(" ") == @[""]
+    doAssert "".rsplit({' '}) == @[""]
+    # Empty separators:
+    let s = " this is an example  "
+    doAssert "".rsplit({}) == @[""]
+    doAssert "".rsplit("") == @[""]
+    doAssert s.rsplit({}) == @[s]
+    doAssert s.rsplit("") == @[s]
 
   block: # splitWhitespace
     let s = " this is an example  "
@@ -509,9 +527,8 @@ template main() =
 
   block: # toHex
     doAssert(toHex(100i16, 32) == "00000000000000000000000000000064")
-    doAssert(toHex(-100i16, 32) == "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFF9C")
-    whenJsNoBigInt64: discard
-    do:
+    when hasWorkingInt64:
+      doAssert(toHex(-100i16, 32) == "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFF9C")
       doAssert(toHex(high(uint64)) == "FFFFFFFFFFFFFFFF")
       doAssert(toHex(high(uint64), 16) == "FFFFFFFFFFFFFFFF")
       doAssert(toHex(high(uint64), 32) == "0000000000000000FFFFFFFFFFFFFFFF")
@@ -532,9 +549,8 @@ template main() =
     doAssert(spaces(0) == "")
 
   block: # toBin, toOct
-    whenJsNoBigInt64: # bug #11369
-      discard
-    do:
+    when hasWorkingInt64:
+      # bug #11369
       var num: int64 = -1
       doAssert num.toBin(64) == "1111111111111111111111111111111111111111111111111111111111111111"
       doAssert num.toOct(24) == "001777777777777777777777"
@@ -661,11 +677,22 @@ template main() =
       doAssert b == f2
       doAssert c == f3
 
-  block: # parseEnum TODO: merge above
-    type MyEnum = enum enA, enB, enC, enuD, enE
-    doAssert parseEnum[MyEnum]("enu_D") == enuD
+    block:
+      type MyEnum = enum enA, enB, enC, enuD, enE
+      doAssert parseEnum[MyEnum]("enu_D") == enuD
 
-    doAssert parseEnum("invalid enum value", enC) == enC
+      doAssert parseEnum("invalid enum value", enC) == enC
+    
+    block: # issue #22726
+      type SomeEnum = enum A, B, C
+
+      proc assignEnum(dest: var enum, s: string) =
+        type ty = typeof(dest)
+        dest = parseEnum[ty](s)
+      
+      var v: SomeEnum
+      v.assignEnum("A")
+      doAssert v == A
 
   block: # indentation
     doAssert 0 == indentation """
@@ -744,8 +771,7 @@ bar
 
   block: # formatSize
     disableVm:
-      whenJsNoBigInt64: discard
-      do:
+      when hasWorkingInt64:
         doAssert formatSize((1'i64 shl 31) + (300'i64 shl 20)) == "2.293GiB" # <=== bug #8231
       doAssert formatSize((2.234*1024*1024).int) == "2.234MiB"
       doAssert formatSize(4096) == "4KiB"

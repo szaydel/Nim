@@ -12,7 +12,7 @@
 ##
 ## Unstable API.
 import std/private/since
-import tables, strutils, parseutils
+import std/[tables, strutils, parseutils]
 
 type
   HttpHeaders* = ref object
@@ -22,7 +22,7 @@ type
   HttpHeaderValues* = distinct seq[string]
 
   # The range starts at '0' so that we don't have to explicitly initialise
-  # it. See: http://irclogs.nim-lang.org/19-09-2016.html#19:48:27 for context.
+  # it. See: https://irclogs.nim-lang.org/19-09-2016.html#19:48:27 for context.
   HttpCode* = distinct range[0 .. 599]
 
   HttpVersion* = enum
@@ -126,7 +126,8 @@ func toTitleCase(s: string): string =
     result[i] = if upper: toUpperAscii(s[i]) else: toLowerAscii(s[i])
     upper = s[i] == '-'
 
-func toCaseInsensitive(headers: HttpHeaders, s: string): string {.inline.} =
+func toCaseInsensitive*(headers: HttpHeaders, s: string): string {.inline.} =
+  ## For internal usage only. Do not use.
   return if headers.isTitleCase: toTitleCase(s) else: toLowerAscii(s)
 
 func newHttpHeaders*(titleCase=false): HttpHeaders =
@@ -163,7 +164,8 @@ func `[]`*(headers: HttpHeaders, key: string): HttpHeaderValues =
   ## To access multiple values of a key, use the overloaded `[]` below or
   ## to get all of them access the `table` field directly.
   {.cast(noSideEffect).}:
-    return headers.table[headers.toCaseInsensitive(key)].HttpHeaderValues
+    let tmp = headers.table[headers.toCaseInsensitive(key)]
+    return HttpHeaderValues(tmp)
 
 converter toString*(values: HttpHeaderValues): string =
   return seq[string](values)[0]
@@ -210,6 +212,7 @@ iterator pairs*(headers: HttpHeaders): tuple[key, value: string] =
 func contains*(values: HttpHeaderValues, value: string): bool =
   ## Determines if `value` is one of the values inside `values`. Comparison
   ## is performed without case sensitivity.
+  result = false
   for val in seq[string](values):
     if val.toLowerAscii == value.toLowerAscii: return true
 
@@ -228,22 +231,22 @@ func getOrDefault*(headers: HttpHeaders, key: string,
 func len*(headers: HttpHeaders): int {.inline.} = headers.table.len
 
 func parseList(line: string, list: var seq[string], start: int): int =
+  result = 0
   var i = 0
   var current = ""
   while start+i < line.len and line[start + i] notin {'\c', '\l'}:
     i += line.skipWhitespace(start + i)
     i += line.parseUntil(current, {'\c', '\l', ','}, start + i)
-    list.add(current)
+    list.add(move current)  # implicit current.setLen(0)
     if start+i < line.len and line[start + i] == ',':
       i.inc # Skip ,
-    current.setLen(0)
 
 func parseHeader*(line: string): tuple[key: string, value: seq[string]] =
   ## Parses a single raw header HTTP line into key value pairs.
   ##
   ## Used by `asynchttpserver` and `httpclient` internally and should not
   ## be used by you.
-  result.value = @[]
+  result = ("", @[])
   var i = 0
   i = line.parseUntil(result.key, ':')
   inc(i) # skip :

@@ -1,3 +1,15 @@
+## Basic usage
+## ===========
+##
+## Encoding data
+## -------------
+##
+## Apart from strings you can also encode lists of integers or characters:
+
+## Decoding data
+## -------------
+##
+
 
 import subdir / subdir_b / utils
 
@@ -400,3 +412,11 @@ type # bug #21483
    MyObject* = object
       someString*: string ## This is a string
       annotated* {.somePragma.}: string ## This is an annotated string
+
+type
+  AnotherObject* = object
+    case x*: bool
+    of true:
+      y*: proc (x: string)
+    of false:
+      hidden: string

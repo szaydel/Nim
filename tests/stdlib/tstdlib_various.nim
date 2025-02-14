@@ -27,7 +27,6 @@ Hi Andreas! How do you feel, Rumpf?
 [2, 3, 4, 5]
 [2, 3, 4, 5, 6]
 [1, 2, 3, 4, 5, 6]
-true
 <h1><a href="http://force7.de/nim">Nim</a></h1>
 '''
 """
@@ -160,7 +159,7 @@ block tsegfaults:
     var crashes = 0
     proc main =
       try:
-        var x: ptr int
+        var x: ptr int = nil
         echo x[]
         try:
           raise newException(ValueError, "not a crash")
@@ -207,11 +206,7 @@ block tsplit2:
     s.add("#")
     s.add(w)
 
-  try:
-    discard "hello".split("")
-    echo "false"
-  except AssertionDefect:
-    echo "true"
+  doAssert "true".split("") == @["true"]
 
 
 

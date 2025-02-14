@@ -56,18 +56,32 @@ template isMixedIn(sym): bool =
                                s.magic == mNone and
                                s.kind in OverloadableSyms)
 
+template canOpenSym(s): bool =
+  {withinMixin, withinConcept} * flags == {withinMixin} and s.id notin ctx.toBind
+
 proc semGenericStmtSymbol(c: PContext, n: PNode, s: PSym,
                           ctx: var GenericCtx; flags: TSemGenericFlags,
+                          isAmbiguous: bool,
                           fromDotExpr=false): PNode =
+  result = nil
   semIdeForTemplateOrGenericCheck(c.config, n, ctx.cursorInBody)
   incl(s.flags, sfUsed)
   template maybeDotChoice(c: PContext, n: PNode, s: PSym, fromDotExpr: bool) =
     if fromDotExpr:
       result = symChoice(c, n, s, scForceOpen)
-      if result.len == 1:
+      if result.kind == nkOpenSymChoice and result.len == 1:
         result.transitionSonsKind(nkClosedSymChoice)
     else:
       result = symChoice(c, n, s, scOpen)
+      if canOpenSym(s):
+        if openSym in c.features:
+          if result.kind == nkSym:
+            result = newOpenSym(result)
+          else:
+            result.typ() = nil
+        else:
+          result.flags.incl nfDisabledOpenSym
+          result.typ() = nil
   case s.kind
   of skUnknown:
     # Introduced in this pass! Leave it as an identifier.
@@ -91,10 +105,28 @@ proc semGenericStmtSymbol(c: PContext, n: PNode, s: PSym,
     if s.typ != nil and s.typ.kind == tyStatic:
       if s.typ.n != nil:
         result = s.typ.n
+      elif c.inGenericContext > 0 and withinConcept notin flags:
+        # don't leave generic param as identifier node in generic type,
+        # sigmatch will try to instantiate generic type AST without all params
+        # fine to give a symbol node a generic type here since
+        # we are in a generic context and `prepareNode` will be called
+        result = newSymNodeTypeDesc(s, c.idgen, n.info)
+        if canOpenSym(result.sym):
+          if openSym in c.features:
+            result = newOpenSym(result)
+          else:
+            result.flags.incl nfDisabledOpenSym
+            result.typ() = nil
       else:
         result = n
     else:
       result = newSymNodeTypeDesc(s, c.idgen, n.info)
+      if canOpenSym(result.sym):
+        if openSym in c.features:
+          result = newOpenSym(result)
+        else:
+          result.flags.incl nfDisabledOpenSym
+          result.typ() = nil
     onUse(n.info, s)
   of skParam:
     result = n
@@ -102,12 +134,41 @@ proc semGenericStmtSymbol(c: PContext, n: PNode, s: PSym,
   of skType:
     if (s.typ != nil) and
        (s.typ.flags * {tfGenericTypeParam, tfImplicitTypeParam} == {}):
+      if isAmbiguous:
+        # ambiguous types should be symchoices since lookup behaves
+        # differently for them in regular expressions
+        maybeDotChoice(c, n, s, fromDotExpr)
+        return
       result = newSymNodeTypeDesc(s, c.idgen, n.info)
+      if canOpenSym(result.sym):
+        if openSym in c.features:
+          result = newOpenSym(result)
+        else:
+          result.flags.incl nfDisabledOpenSym
+          result.typ() = nil
+    elif c.inGenericContext > 0 and withinConcept notin flags:
+      # don't leave generic param as identifier node in generic type,
+      # sigmatch will try to instantiate generic type AST without all params
+      # fine to give a symbol node a generic type here since
+      # we are in a generic context and `prepareNode` will be called
+      result = newSymNodeTypeDesc(s, c.idgen, n.info)
+      if canOpenSym(result.sym):
+        if openSym in c.features:
+          result = newOpenSym(result)
+        else:
+          result.flags.incl nfDisabledOpenSym
+          result.typ() = nil
     else:
       result = n
     onUse(n.info, s)
   else:
     result = newSymNode(s, n.info)
+    if canOpenSym(result.sym):
+      if openSym in c.features:
+        result = newOpenSym(result)
+      else:
+        result.flags.incl nfDisabledOpenSym
+        result.typ() = nil
     onUse(n.info, s)
 
 proc lookup(c: PContext, n: PNode, flags: TSemGenericFlags,
@@ -129,7 +190,7 @@ proc lookup(c: PContext, n: PNode, flags: TSemGenericFlags,
     elif s.isMixedIn:
       result = symChoice(c, n, s, scForceOpen)
     else:
-      result = semGenericStmtSymbol(c, n, s, ctx, flags)
+      result = semGenericStmtSymbol(c, n, s, ctx, flags, amb)
   # else: leave as nkIdent
 
 proc newDot(n, b: PNode): PNode =
@@ -138,30 +199,46 @@ proc newDot(n, b: PNode): PNode =
   result.add(b)
 
 proc fuzzyLookup(c: PContext, n: PNode, flags: TSemGenericFlags,
-                 ctx: var GenericCtx; isMacro: var bool): PNode =
+                 ctx: var GenericCtx; isMacro: var bool;
+                 inCall = false): PNode =
   assert n.kind == nkDotExpr
   semIdeForTemplateOrGenericCheck(c.config, n, ctx.cursorInBody)
 
   let luf = if withinMixin notin flags: {checkUndeclared, checkModule} else: {checkModule}
 
+  c.isAmbiguous = false
   var s = qualifiedLookUp(c, n, luf)
   if s != nil:
-    result = semGenericStmtSymbol(c, n, s, ctx, flags)
+    isMacro = s.kind in {skTemplate, skMacro}
+    result = semGenericStmtSymbol(c, n, s, ctx, flags, c.isAmbiguous)
   else:
     n[0] = semGenericStmt(c, n[0], flags, ctx)
     result = n
     let n = n[1]
     let ident = considerQuotedIdent(c, n)
-    var candidates = searchInScopesFilterBy(c, ident, routineKinds)
+    # could be type conversion if like a.T and not a.T()
+    let symKinds = if inCall: routineKinds else: routineKinds+{skType}
+    var candidates = selectFromScopesElseAll(c, ident, symKinds)
     if candidates.len > 0:
       let s = candidates[0] # XXX take into account the other candidates!
       isMacro = s.kind in {skTemplate, skMacro}
       if withinBind in flags or s.id in ctx.toBind:
-        result = newDot(result, symChoice(c, n, s, scClosed))
+        if s.kind == skType: # don't put types in sym choice
+          var ambig = false
+          if candidates.len > 1:
+            let s2 = searchInScopes(c, ident, ambig)
+          result = newDot(result, semGenericStmtSymbol(c, n, s, ctx, flags,
+            isAmbiguous = ambig, fromDotExpr = true))
+        else:
+          result = newDot(result, symChoice(c, n, s, scClosed))
       elif s.isMixedIn:
         result = newDot(result, symChoice(c, n, s, scForceOpen))
       else:
-        let syms = semGenericStmtSymbol(c, n, s, ctx, flags, fromDotExpr=true)
+        var ambig = false
+        if s.kind == skType and candidates.len > 1:
+          discard searchInScopes(c, ident, ambig)
+        let syms = semGenericStmtSymbol(c, n, s, ctx, flags,
+          isAmbiguous = ambig, fromDotExpr = true)
         result = newDot(result, syms)
 
 proc addTempDecl(c: PContext; n: PNode; kind: TSymKind) =
@@ -169,6 +246,18 @@ proc addTempDecl(c: PContext; n: PNode; kind: TSymKind) =
   addPrelimDecl(c, s)
   styleCheckDef(c, n.info, s, kind)
   onDef(n.info, s)
+
+proc addTempDeclToIdents(c: PContext; n: PNode; kind: TSymKind; inCall: bool) =
+  case n.kind 
+  of nkIdent:
+    if inCall:
+      addTempDecl(c, n, kind)
+  of nkCallKinds:
+    for s in n:
+      addTempDeclToIdents(c, s, kind, true)  
+  else:
+    for s in n:
+      addTempDeclToIdents(c, s, kind, inCall)
 
 proc semGenericStmt(c: PContext, n: PNode,
                     flags: TSemGenericFlags, ctx: var GenericCtx): PNode =
@@ -191,7 +280,7 @@ proc semGenericStmt(c: PContext, n: PNode,
     #var s = qualifiedLookUp(c, n, luf)
     #if s != nil: result = semGenericStmtSymbol(c, n, s)
     # XXX for example: ``result.add`` -- ``add`` needs to be looked up here...
-    var dummy: bool
+    var dummy: bool = false
     result = fuzzyLookup(c, n, flags, ctx, dummy)
   of nkSym:
     let a = n.sym
@@ -216,7 +305,9 @@ proc semGenericStmt(c: PContext, n: PNode,
     # check if it is an expression macro:
     checkMinSonsLen(n, 1, c.config)
     let fn = n[0]
+    c.isAmbiguous = false
     var s = qualifiedLookUp(c, fn, {})
+    let ambig = c.isAmbiguous
     if s == nil and
         {withinMixin, withinConcept}*flags == {} and
         fn.kind in {nkIdent, nkAccQuoted} and
@@ -269,7 +360,12 @@ proc semGenericStmt(c: PContext, n: PNode,
       of skType:
         # bad hack for generics:
         if (s.typ != nil) and (s.typ.kind != tyGenericParam):
-          result[0] = newSymNodeTypeDesc(s, c.idgen, fn.info)
+          if ambig:
+            # ambiguous types should be symchoices since lookup behaves
+            # differently for them in regular expressions
+            result[0] = sc
+          else:
+            result[0] = newSymNodeTypeDesc(s, c.idgen, fn.info)
           onUse(fn.info, s)
           first = 1
       else:
@@ -277,7 +373,7 @@ proc semGenericStmt(c: PContext, n: PNode,
         onUse(fn.info, s)
         first = 1
     elif fn.kind == nkDotExpr:
-      result[0] = fuzzyLookup(c, fn, flags, ctx, mixinContext)
+      result[0] = fuzzyLookup(c, fn, flags, ctx, mixinContext, inCall = true)
       first = 1
     # Consider 'when declared(globalsSlot): ThreadVarSetValue(globalsSlot, ...)'
     # in threads.nim: the subtle preprocessing here binds 'globalsSlot' which
@@ -342,7 +438,9 @@ proc semGenericStmt(c: PContext, n: PNode,
       var a = n[i]
       checkMinSonsLen(a, 1, c.config)
       for j in 0..<a.len-1:
-        a[j] = semGenericStmt(c, a[j], flags, ctx)
+        a[j] = semGenericStmt(c, a[j], flags+{withinMixin}, ctx)
+        addTempDeclToIdents(c, a[j], skVar, false)
+
       a[^1] = semGenericStmtScope(c, a[^1], flags, ctx)
     closeScope(c)
   of nkForStmt, nkParForStmt:
@@ -433,14 +531,53 @@ proc semGenericStmt(c: PContext, n: PNode,
       if n[0].kind != nkEmpty:
         n[0] = semGenericStmt(c, n[0], flags+{withinTypeDesc}, ctx)
       for i in 1..<n.len:
-        var a: PNode
+        var a: PNode = nil
         case n[i].kind
         of nkEnumFieldDef: a = n[i][0]
         of nkIdent: a = n[i]
         else: illFormedAst(n, c.config)
         addDecl(c, newSymS(skUnknown, getIdentNode(c, a), c))
-  of nkObjectTy, nkTupleTy, nkTupleClassTy:
-    discard
+  of nkTupleTy:
+    for i in 0..<n.len:
+      var a = n[i]
+      case a.kind:
+      of nkCommentStmt, nkNilLit, nkSym, nkEmpty: continue
+      of nkIdentDefs:
+        checkMinSonsLen(a, 3, c.config)
+        a[^2] = semGenericStmt(c, a[^2], flags+{withinTypeDesc}, ctx)
+        a[^1] = semGenericStmt(c, a[^1], flags, ctx)
+        for j in 0..<a.len-2:
+          addTempDecl(c, getIdentNode(c, a[j]), skField)
+      else:
+        illFormedAst(a, c.config)
+  of nkObjectTy:
+    if n.len > 0:
+      openScope(c)
+      for i in 0..<n.len:
+        result[i] = semGenericStmt(c, n[i], flags, ctx)
+      closeScope(c)
+  of nkRecList:
+    for i in 0..<n.len:
+      var a = n[i]
+      case a.kind:
+      of nkCommentStmt, nkNilLit, nkSym, nkEmpty: continue
+      of nkIdentDefs:
+        checkMinSonsLen(a, 3, c.config)
+        a[^2] = semGenericStmt(c, a[^2], flags+{withinTypeDesc}, ctx)
+        a[^1] = semGenericStmt(c, a[^1], flags, ctx)
+        for j in 0..<a.len-2:
+          addTempDecl(c, getIdentNode(c, a[j]), skField)
+      of nkRecCase, nkRecWhen:
+        n[i] = semGenericStmt(c, a, flags, ctx)
+      else:
+        illFormedAst(a, c.config)
+  of nkRecCase:
+    checkSonsLen(n[0], 3, c.config)
+    n[0][^2] = semGenericStmt(c, n[0][^2], flags+{withinTypeDesc}, ctx)
+    n[0][^1] = semGenericStmt(c, n[0][^1], flags, ctx)
+    addTempDecl(c, getIdentNode(c, n[0][0]), skField)
+    for i in 1..<n.len:
+      n[i] = semGenericStmt(c, n[i], flags, ctx)
   of nkFormalParams:
     checkMinSonsLen(n, 1, c.config)
     for i in 1..<n.len:
@@ -476,9 +613,27 @@ proc semGenericStmt(c: PContext, n: PNode,
       else:
         body = getBody(c.graph, s)
     else: body = n[bodyPos]
-    n[bodyPos] = semGenericStmtScope(c, body, flags, ctx)
+    let bodyFlags = if n.kind == nkTemplateDef: flags + {withinMixin} else: flags
+    n[bodyPos] = semGenericStmtScope(c, body, bodyFlags, ctx)
     closeScope(c)
-  of nkPragma, nkPragmaExpr: discard
+  of nkPragmaExpr:
+    result[1] = semGenericStmt(c, n[1], flags, ctx)
+  of nkPragma:
+    for i in 0 ..< n.len:
+      let x = n[i]
+      let prag = whichPragma(x)
+      if x.kind in nkPragmaCallKinds:
+        # process each child individually to prevent untyped macros/templates
+        # from instantiating
+        # if pragma is language-level pragma, skip name node:
+        let start = ord(prag != wInvalid)
+        for j in start ..< x.len:
+          # treat as mixin context for user pragmas & macro args
+          x[j] = semGenericStmt(c, x[j], flags+{withinMixin}, ctx)
+      elif prag == wInvalid:
+        # only sem if not a language-level pragma 
+        # treat as mixin context for user pragmas & macro args
+        result[i] = semGenericStmt(c, x, flags+{withinMixin}, ctx)
   of nkExprColonExpr, nkExprEqExpr:
     checkMinSonsLen(n, 2, c.config)
     result[1] = semGenericStmt(c, n[1], flags, ctx)
@@ -504,16 +659,18 @@ proc semGenericStmt(c: PContext, n: PNode,
     if withinTypeDesc in flags: dec c.inTypeContext
 
 proc semGenericStmt(c: PContext, n: PNode): PNode =
-  var ctx: GenericCtx
-  ctx.toMixin = initIntSet()
-  ctx.toBind = initIntSet()
+  var ctx = GenericCtx(
+    toMixin: initIntSet(),
+    toBind: initIntSet()
+  )
   result = semGenericStmt(c, n, {}, ctx)
   semIdeForTemplateOrGeneric(c, result, ctx.cursorInBody)
 
 proc semConceptBody(c: PContext, n: PNode): PNode =
-  var ctx: GenericCtx
-  ctx.toMixin = initIntSet()
-  ctx.toBind = initIntSet()
+  var ctx = GenericCtx(
+    toMixin: initIntSet(),
+    toBind: initIntSet()
+  )
   result = semGenericStmt(c, n, {withinConcept}, ctx)
   semIdeForTemplateOrGeneric(c, result, ctx.cursorInBody)
 

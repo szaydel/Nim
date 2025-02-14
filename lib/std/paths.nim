@@ -1,4 +1,7 @@
 ## This module implements path handling.
+##
+## **See also:**
+## * `files module <files.html>`_ for file access
 
 import std/private/osseps
 export osseps
@@ -6,7 +9,7 @@ export osseps
 import std/envvars
 import std/private/osappdirs
 
-import pathnorm
+import std/[pathnorm, hashes, sugar, strutils]
 
 from std/private/ospaths2 import  joinPath, splitPath,
                                   ReadDirEffect, WriteDirEffect,
@@ -21,6 +24,16 @@ export ReadDirEffect, WriteDirEffect
 
 type
   Path* = distinct string
+
+func hash*(x: Path): Hash =
+  let x = x.string.dup(normalizePath)
+  if FileSystemCaseSensitive:
+    result = x.hash
+  else:
+    result = x.toLowerAscii.hash
+
+template `$`*(x: Path): string =
+  string(x)
 
 func `==`*(x, y: Path): bool {.inline.} =
   ## Compares two paths.

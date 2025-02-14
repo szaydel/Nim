@@ -7,20 +7,22 @@
 #    distribution, for details about the copyright.
 #
 
+{.deprecated: "use the nimble packages `malebolgia`, `taskpools` or `weave` instead".}
+
 ## Implements Nim's `parallel & spawn statements <manual_experimental.html#parallel-amp-spawn>`_.
 ##
 ## Unstable API.
 ##
 ## See also
 ## ========
-## * `threads module <threads.html>`_ for basic thread support
+## * `threads module <typedthreads.html>`_ for basic thread support
 ## * `locks module <locks.html>`_ for locks and condition variables
 ## * `asyncdispatch module <asyncdispatch.html>`_ for asynchronous IO
 
 when not compileOption("threads"):
   {.error: "Threadpool requires --threads:on option.".}
 
-import cpuinfo, cpuload, locks, os
+import std/[cpuinfo, cpuload, locks, os]
 
 when defined(nimPreviewSlimSystem):
   import std/[assertions, typedthreads, sysatomics]
@@ -153,6 +155,8 @@ proc selectWorker(w: ptr Worker; fn: WorkerProc; data: pointer): bool =
     signal(w.taskArrived)
     blockUntil(w.taskStarted)
     result = true
+  else:
+    result = false
 
 proc cleanFlowVars(w: ptr Worker) =
   let q = addr(w.q)
@@ -275,7 +279,7 @@ proc blockUntilAny*(flowVars: openArray[FlowVarBase]): int =
   ## to be able to wait on, -1 is returned.
   ##
   ## **Note:** This results in non-deterministic behaviour and should be avoided.
-  var ai: AwaitInfo
+  var ai: AwaitInfo = AwaitInfo()
   ai.cv.initSemaphore()
   var conflicts = 0
   result = -1

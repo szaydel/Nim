@@ -58,13 +58,13 @@ runnableExamples("-r:off"):
 
   stdout.styledWriteLine(fgRed, "red text ", styleBright, "bold red", fgDefault, " bold text")
 
-import macros
-import strformat
-from strutils import toLowerAscii, `%`
-import colors
+import std/macros
+import std/strformat
+from std/strutils import toLowerAscii, `%`, parseInt
+import std/colors
 
 when defined(windows):
-  import winlean
+  import std/winlean
 
 when defined(nimPreviewSlimSystem):
   import std/[syncio, assertions]
@@ -96,10 +96,11 @@ const
   fgPrefix = "\e[38;2;"
   bgPrefix = "\e[48;2;"
   ansiResetCode* = "\e[0m"
+  getPos = "\e[6n"
   stylePrefix = "\e["
 
 when defined(windows):
-  import winlean, os
+  import std/[winlean, os]
 
   const
     DUPLICATE_SAME_ACCESS = 2
@@ -220,6 +221,9 @@ when defined(windows):
       raiseOSError(osLastError())
     return (int(c.dwCursorPosition.x), int(c.dwCursorPosition.y))
 
+  proc getCursorPos*(): tuple [x, y: int] {.raises: [ValueError, IOError, OSError].} =
+    return getCursorPos(getStdHandle(STD_OUTPUT_HANDLE))
+
   proc setCursorPos(h: Handle, x, y: int) =
     var c: COORD
     c.x = int16(x)
@@ -253,10 +257,10 @@ when defined(windows):
     if f == stderr: term.hStderr else: term.hStdout
 
 else:
-  import termios, posix, os, parseutils
+  import std/[termios, posix, os, parseutils]
 
   proc setRaw(fd: FileHandle, time: cint = TCSAFLUSH) =
-    var mode: Termios
+    var mode: Termios = default(Termios)
     discard fd.tcGetAttr(addr mode)
     mode.c_iflag = mode.c_iflag and not Cflag(BRKINT or ICRNL or INPCK or
       ISTRIP or IXON)
@@ -267,10 +271,52 @@ else:
     mode.c_cc[VTIME] = 0.cuchar
     discard fd.tcSetAttr(time, addr mode)
 
+  proc getCursorPos*(): tuple [x, y: int] {.raises: [ValueError, IOError].} =
+    ## Returns cursor position (x, y)
+    ## writes to stdout and expects the terminal to respond via stdin
+    var
+      xStr = ""
+      yStr = ""
+      ch: char = '\0'
+      ct: int = 0
+      readX = false
+
+    # use raw mode to ask terminal for cursor position
+    let fd = getFileHandle(stdin)
+    var oldMode: Termios
+    discard fd.tcGetAttr(addr oldMode)
+    fd.setRaw()
+    stdout.write(getPos)
+    flushFile(stdout)
+
+    try:
+      # parse response format: [yyy;xxxR
+      while true:
+        let n = readBuffer(stdin, addr ch, 1)
+        if n == 0 or ch == 'R':
+          if xStr == "" or yStr == "":
+            raise newException(ValueError, "Got character position message that was missing data")
+          break
+        ct += 1
+        if ct > 16:
+          raise newException(ValueError, "Got unterminated character position message from terminal")
+        if ch == ';':
+          readX = true
+        elif ch in {'0'..'9'}:
+          if readX:
+            xStr.add(ch)
+          else:
+            yStr.add(ch)
+    finally:
+      # restore previous terminal mode
+      discard fd.tcSetAttr(TCSADRAIN, addr oldMode)
+
+    return (parseInt(xStr), parseInt(yStr))
+
   proc terminalWidthIoctl*(fds: openArray[int]): int =
     ## Returns terminal width from first fd that supports the ioctl.
 
-    var win: IOctl_WinSize
+    var win: IOctl_WinSize = default(IOctl_WinSize)
     for fd in fds:
       if ioctl(cint(fd), TIOCGWINSZ, addr win) != -1:
         return int(win.ws_col)
@@ -279,7 +325,7 @@ else:
   proc terminalHeightIoctl*(fds: openArray[int]): int =
     ## Returns terminal height from first fd that supports the ioctl.
 
-    var win: IOctl_WinSize
+    var win: IOctl_WinSize = default(IOctl_WinSize)
     for fd in fds:
       if ioctl(cint(fd), TIOCGWINSZ, addr win) != -1:
         return int(win.ws_row)
@@ -303,9 +349,9 @@ else:
     # unrelated to the terminal characteristics.
     # See POSIX Base Definitions Section 8.1 Environment Variable Definition
 
-    var w: int
+    var w: int = 0
     var s = getEnv("COLUMNS") # Try standard env var
-    if len(s) > 0 and parseInt(s, w) > 0 and w > 0:
+    if len(s) > 0 and parseSaturatedNatural(s, w) > 0 and w > 0:
       return w
     w = terminalWidthIoctl([0, 1, 2]) # Try standard file descriptors
     if w > 0: return w
@@ -337,9 +383,9 @@ else:
     # unrelated to the terminal characteristics.
     # See POSIX Base Definitions Section 8.1 Environment Variable Definition
 
-    var h: int
+    var h: int = 0
     var s = getEnv("LINES") # Try standard env var
-    if len(s) > 0 and parseInt(s, h) > 0 and h > 0:
+    if len(s) > 0 and parseSaturatedNatural(s, h) > 0 and h > 0:
       return h
     h = terminalHeightIoctl([0, 1, 2]) # Try standard file descriptors
     if h > 0: return h
@@ -876,13 +922,13 @@ when defined(windows):
     stdout.write "\n"
 
 else:
-  import termios
+  import std/termios
 
   proc readPasswordFromStdin*(prompt: string, password: var string):
                             bool {.tags: [ReadIOEffect, WriteIOEffect].} =
     password.setLen(0)
     let fd = stdin.getFileHandle()
-    var cur, old: Termios
+    var cur, old: Termios = default(Termios)
     discard fd.tcGetAttr(cur.addr)
     old = cur
     cur.c_lflag = cur.c_lflag and not Cflag(ECHO)
@@ -932,7 +978,7 @@ proc isTrueColorSupported*(): bool =
   return getTerminal().trueColorIsSupported
 
 when defined(windows):
-  import os
+  import std/os
 
 proc enableTrueColors*() =
   ## Enables true color.

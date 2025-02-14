@@ -322,6 +322,36 @@ used to get this output.
     raise newException(AssertionDefect, $a & " != " & $b)
   ```
 
+
+Going further
+-------------
+
+It is possible to create more complex macros by combining different
+`NimNode` symbols with `quote do:` expressions. For example, you may
+use `newStmtList` to build your macro iteratively, and `ident` in cases
+in which you wish to create an identifier from a string, as shown below.
+
+  ```nim
+  import std/macros
+
+  macro createProcedures() =
+    result = newStmtList()
+
+    for i in 0..<10:
+      let name = ident("myProc" & $i)
+      let content = newLit("I am procedure number #" & $i)
+
+      result.add quote do:
+        proc `name`() =
+          echo `content`
+
+  createProcedures()
+  myProc7()
+  ```
+
+The call to `myProc7` will echo `I am procedure number #7`.
+
+
 With Power Comes Responsibility
 -------------------------------
 
@@ -366,7 +396,7 @@ recommended way. But still `strformat` is a good example for a
 practical use case for a macro that is slightly more complex than the
 `assert` macro.
 
-[Strformat](https://github.com/nim-lang/Nim/blob/5845716df8c96157a047c2bd6bcdd795a7a2b9b1/lib/pure/strformat.nim#L280)
+[Strformat](https://github.com/nim-lang/Nim/blob/devel/lib/pure/strformat.nim)
 
 Ast Pattern Matching
 --------------------

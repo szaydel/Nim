@@ -19,7 +19,7 @@ import std/[os, osproc, streams, sequtils, times, strtabs, json, jsonutils, suga
 import std / strutils except addf
 
 when defined(nimPreviewSlimSystem):
-  import std/syncio
+  import std/[syncio, assertions]
 
 import ../dist/checksums/src/checksums/sha1
 
@@ -33,6 +33,7 @@ type
     hasGnuAsm,                # CC's asm uses the absurd GNU assembler syntax
     hasDeclspec,              # CC has __declspec(X)
     hasAttribute,             # CC has __attribute__((X))
+    hasBuiltinUnreachable     # CC has __builtin_unreachable
   TInfoCCProps* = set[TInfoCCProp]
   TInfoCC* = tuple[
     name: string,        # the short name of the compiler
@@ -62,7 +63,7 @@ type
 
 # Configuration settings for various compilers.
 # When adding new compilers, the cmake sources could be a good reference:
-# http://cmake.org/gitweb?p=cmake.git;a=tree;f=Modules/Platform;
+# https://cmake.org/gitweb?p=cmake.git;a=tree;f=Modules/Platform;
 
 template compiler(name, settings: untyped): untyped =
   proc name: TInfoCC {.compileTime.} = settings
@@ -95,7 +96,7 @@ compiler gcc:
     produceAsm: gnuAsmListing,
     cppXsupport: "-std=gnu++17 -funsigned-char",
     props: {hasSwitchRange, hasComputedGoto, hasCpp, hasGcGuard, hasGnuAsm,
-            hasAttribute})
+            hasAttribute, hasBuiltinUnreachable})
 
 # GNU C and C++ Compiler
 compiler nintendoSwitchGCC:
@@ -122,7 +123,7 @@ compiler nintendoSwitchGCC:
     produceAsm: gnuAsmListing,
     cppXsupport: "-std=gnu++17 -funsigned-char",
     props: {hasSwitchRange, hasComputedGoto, hasCpp, hasGcGuard, hasGnuAsm,
-            hasAttribute})
+            hasAttribute, hasBuiltinUnreachable})
 
 # LLVM Frontend for GCC/G++
 compiler llvmGcc:
@@ -161,7 +162,11 @@ compiler vcc:
     linkerExe: "cl",
     linkTmpl: "$builddll$vccplatform /Fe$exefile $objfiles $buildgui /nologo $options",
     includeCmd: " /I",
-    linkDirCmd: " /LIBPATH:",
+    # HACK: we call `cl` so we have to pass `/link` for linker options,
+    # but users may still want to pass arguments to `cl` (see #14221)
+    # to deal with this, we add `/link` before each `/LIBPATH`,
+    # the linker ignores extra `/link`s since it's an unrecognized argument
+    linkDirCmd: " /link /LIBPATH:",
     linkLibCmd: " $1.lib",
     debug: " /RTC1 /Z7 ",
     pic: "",
@@ -170,6 +175,22 @@ compiler vcc:
     produceAsm: "/Fa$asmfile",
     cppXsupport: "",
     props: {hasCpp, hasAssume, hasDeclspec})
+
+# Nvidia CUDA NVCC Compiler
+compiler nvcc:
+  result = gcc()
+  result.name = "nvcc"
+  result.compilerExe = "nvcc"
+  result.cppCompiler = "nvcc"
+  result.compileTmpl = "-c -x cu -Xcompiler=\"$options\" $include -o $objfile $file"
+  result.linkTmpl = "$buildgui $builddll -o $exefile $objfiles -Xcompiler=\"$options\""
+
+# AMD HIPCC Compiler (rocm/cuda)
+compiler hipcc:
+  result = clang()
+  result.name = "hipcc"
+  result.compilerExe = "hipcc"
+  result.cppCompiler = "hipcc"
 
 compiler clangcl:
   result = vcc()
@@ -284,7 +305,9 @@ const
     envcc(),
     icl(),
     icc(),
-    clangcl()]
+    clangcl(),
+    hipcc(),
+    nvcc()]
 
   hExt* = ".h"
 
@@ -486,6 +509,10 @@ proc vccplatform(conf: ConfigRef): string =
         of cpuArm: " --platform:arm"
         of cpuAmd64: " --platform:amd64"
         else: ""
+    else:
+      result = ""
+  else:
+    result = ""
 
 proc getLinkOptions(conf: ConfigRef): string =
   result = conf.linkOptions & " " & conf.linkOptionsCmd & " "
@@ -534,7 +561,7 @@ proc ccHasSaneOverflow*(conf: ConfigRef): bool =
     # NOTE: should we need the full version, use -dumpfullversion
     let (s, exitCode) = try: execCmdEx(exe & " -dumpversion") except IOError, OSError, ValueError: ("", 1)
     if exitCode == 0:
-      var major: int
+      var major: int = 0
       discard parseInt(s, major)
       result = major >= 5
   else:
@@ -580,7 +607,7 @@ proc getCompileCFileCmd*(conf: ConfigRef; cfile: Cfile,
 
     compilePattern = joinPath(conf.cCompilerPath, exe)
   else:
-    compilePattern = getCompilerExe(conf, c, isCpp)
+    compilePattern = exe
 
   includeCmd.add(join([CC[c].includeCmd, quoteShell(conf.projectPath.string)]))
 
@@ -644,7 +671,7 @@ proc externalFileChanged(conf: ConfigRef; cfile: Cfile): bool =
 
   let hashFile = toGeneratedFile(conf, conf.mangleModuleName(cfile.cname).AbsoluteFile, "sha1")
   let currentHash = footprint(conf, cfile)
-  var f: File
+  var f: File = default(File)
   if open(f, hashFile.string, fmRead):
     let oldHash = parseSecureHash(f.readLine())
     close(f)
@@ -754,7 +781,7 @@ proc getLinkCmd(conf: ConfigRef; output: AbsoluteFile,
     # https://blog.molecular-matters.com/2017/05/09/deleting-pdb-files-locked-by-visual-studio/
     # and a bit about the .pdb format in case that is ever needed:
     # https://github.com/crosire/blink
-    # http://www.debuginfo.com/articles/debuginfomatch.html#pdbfiles
+    # https://www.debuginfo.com/articles/debuginfomatch.html#pdbfiles
     if conf.hcrOn and isVSCompatible(conf):
       let t = now()
       let pdb = output.string & "." & format(t, "MMMM-yyyy-HH-mm-") & $t.nanosecond & ".pdb"
@@ -779,6 +806,7 @@ template tryExceptOSErrorMessage(conf: ConfigRef; errorPrefix: string = "", body
     raise
 
 proc getExtraCmds(conf: ConfigRef; output: AbsoluteFile): seq[string] =
+  result = @[]
   when defined(macosx):
     if optCDebug in conf.globalOptions and optGenStaticLib notin conf.globalOptions:
       # if needed, add an option to skip or override location
@@ -834,7 +862,10 @@ proc linkViaResponseFile(conf: ConfigRef; cmd: string) =
   else:
     writeFile(linkerArgs, args)
   try:
-    execLinkCmd(conf, cmd.substr(0, last) & " @" & linkerArgs)
+    when defined(macosx):
+      execLinkCmd(conf, "xargs " & cmd.substr(0, last) & " < " & linkerArgs)
+    else:
+      execLinkCmd(conf, cmd.substr(0, last) & " @" & linkerArgs)
   finally:
     removeFile(linkerArgs)
 
@@ -858,6 +889,7 @@ proc hcrLinkTargetName(conf: ConfigRef, objFile: string, isMain = false): Absolu
   result = conf.getNimcacheDir / RelativeFile(targetName)
 
 proc displayProgressCC(conf: ConfigRef, path, compileCmd: string): string =
+  result = ""
   if conf.hasHint(hintCC):
     if optListCmd in conf.globalOptions or conf.verbosity > 1:
       result = MsgKindToStr[hintCC] % (demangleModuleName(path.splitFile.name) & ": " & compileCmd)
@@ -880,15 +912,15 @@ proc preventLinkCmdMaxCmdLen(conf: ConfigRef, linkCmd: string) =
 
 proc callCCompiler*(conf: ConfigRef) =
   var
-    linkCmd: string
+    linkCmd: string = ""
     extraCmds: seq[string]
   if conf.globalOptions * {optCompileOnly, optGenScript} == {optCompileOnly}:
     return # speed up that call if only compiling and no script shall be
            # generated
   #var c = cCompiler
   var script: Rope = ""
-  var cmds: TStringSeq
-  var prettyCmds: TStringSeq
+  var cmds: TStringSeq = default(TStringSeq)
+  var prettyCmds: TStringSeq = default(TStringSeq)
   let prettyCb = proc (idx: int) = writePrettyCmdsStderr(prettyCmds[idx])
 
   for idx, it in conf.toCompile:
@@ -972,10 +1004,11 @@ proc jsonBuildInstructionsFile*(conf: ConfigRef): AbsoluteFile =
   # works out of the box with `hashMainCompilationParams`.
   result = getNimcacheDir(conf) / conf.outFile.changeFileExt("json")
 
-const cacheVersion = "D20210525T193831" # update when `BuildCache` spec changes
+const cacheVersion = "D20240927T193831" # update when `BuildCache` spec changes
 type BuildCache = object
   cacheVersion: string
   outputFile: string
+  outputLastModificationTime: string
   compile: seq[(string, string)]
   link: seq[string]
   linkcmd: string
@@ -989,7 +1022,7 @@ type BuildCache = object
   depfiles: seq[(string, string)]
   nimexe: string
 
-proc writeJsonBuildInstructions*(conf: ConfigRef) =
+proc writeJsonBuildInstructions*(conf: ConfigRef; deps: StringTableRef) =
   var linkFiles = collect(for it in conf.externalToLink:
     var it = it
     if conf.noAbsolutePaths: it = it.extractFilename
@@ -1010,17 +1043,24 @@ proc writeJsonBuildInstructions*(conf: ConfigRef) =
     currentDir: getCurrentDir())
   if optRun in conf.globalOptions or isDefined(conf, "nimBetterRun"):
     bcache.cmdline = conf.commandLine
-    bcache.depfiles = collect(for it in conf.m.fileInfos:
+    for it in conf.m.fileInfos:
       let path = it.fullPath.string
       if isAbsolute(path): # TODO: else?
-        (path, $secureHashFile(path)))
+        if path in deps:
+          bcache.depfiles.add (path, deps[path])
+        else: # backup for configs etc.
+          bcache.depfiles.add (path, $secureHashFile(path))
+
     bcache.nimexe = hashNimExe()
+    if fileExists(bcache.outputFile):
+      bcache.outputLastModificationTime = $getLastModificationTime(bcache.outputFile)
   conf.jsonBuildFile = conf.jsonBuildInstructionsFile
   conf.jsonBuildFile.string.writeFile(bcache.toJson.pretty)
 
 proc changeDetectedViaJsonBuildInstructions*(conf: ConfigRef; jsonFile: AbsoluteFile): bool =
+  result = false
   if not fileExists(jsonFile) or not fileExists(conf.absOutFile): return true
-  var bcache: BuildCache
+  var bcache: BuildCache = default(BuildCache)
   try: bcache.fromJson(jsonFile.string.parseFile)
   except IOError, OSError, ValueError:
     stderr.write "Warning: JSON processing failed for: $#\n" % jsonFile.string
@@ -1034,9 +1074,11 @@ proc changeDetectedViaJsonBuildInstructions*(conf: ConfigRef; jsonFile: Absolute
     # xxx optimize by returning false if stdin input was the same
   for (file, hash) in bcache.depfiles:
     if $secureHashFile(file) != hash: return true
+  if bcache.outputLastModificationTime != $getLastModificationTime(bcache.outputFile):
+    return true
 
 proc runJsonBuildInstructions*(conf: ConfigRef; jsonFile: AbsoluteFile) =
-  var bcache: BuildCache
+  var bcache: BuildCache = default(BuildCache)
   try: bcache.fromJson(jsonFile.string.parseFile)
   except ValueError, KeyError, JsonKindError:
     let e = getCurrentException()
@@ -1049,7 +1091,8 @@ proc runJsonBuildInstructions*(conf: ConfigRef; jsonFile: AbsoluteFile) =
     globalError(conf, gCmdLineInfo,
       "jsonscript command outputFile '$1' must match '$2' which was specified during --compileOnly, see \"outputFile\" entry in '$3' " %
       [outputCurrent, output, jsonFile.string])
-  var cmds, prettyCmds: TStringSeq
+  var cmds: TStringSeq = default(TStringSeq)
+  var prettyCmds: TStringSeq = default(TStringSeq)
   let prettyCb = proc (idx: int) = writePrettyCmdsStderr(prettyCmds[idx])
   for (name, cmd) in bcache.compile:
     cmds.add cmd
@@ -1059,6 +1102,7 @@ proc runJsonBuildInstructions*(conf: ConfigRef; jsonFile: AbsoluteFile) =
   for cmd in bcache.extraCmds: execExternalProgram(conf, cmd, hintExecuting)
 
 proc genMappingFiles(conf: ConfigRef; list: CfileList): Rope =
+  result = ""
   for it in list:
     result.addf("--file:r\"$1\"$N", [rope(it.cname.string)])
 

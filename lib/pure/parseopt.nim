@@ -48,7 +48,7 @@
 ##
 ## Here is an example:
 ##
-## .. code-block::
+##   ```Nim
 ##   import std/parseopt
 ##
 ##   var p = initOptParser("-ab -e:5 --foo --bar=20 file.txt")
@@ -71,6 +71,7 @@
 ##   # Option: foo
 ##   # Option and value: bar, 20
 ##   # Argument: file.txt
+##   ```
 ##
 ## The `getopt iterator<#getopt.i,OptParser>`_, which is provided for
 ## convenience, can be used to iterate through all command line options as well.
@@ -80,7 +81,8 @@
 ## Then set the variable to the new value while parsing.
 ##
 ## Here is an example:
-## .. code-block::
+##
+##   ```Nim
 ##   import std/parseopt
 ##
 ##   var varName: string = "defaultValue"
@@ -95,6 +97,7 @@
 ##         varName = val # do input sanitization in production systems
 ##     of cmdEnd:
 ##       discard
+##   ```
 ##
 ## `shortNoVal` and `longNoVal`
 ## ============================
@@ -119,7 +122,7 @@
 ## `shortNoVal` and `longNoVal`, which is the default, and providing
 ## arguments for those two parameters:
 ##
-## .. code-block::
+##   ```Nim
 ##   import std/parseopt
 ##
 ##   proc printToken(kind: CmdLineKind, key: string, val: string) =
@@ -153,6 +156,7 @@
 ##   # Output:
 ##   # Option and value: j, 4
 ##   # Option and value: first, bar
+##   ```
 ##
 ## See also
 ## ========
@@ -172,7 +176,8 @@
 
 include "system/inclrtl"
 
-import os
+import std/strutils
+import std/os
 
 type
   CmdLineKind* = enum ## The detected command line token.
@@ -232,26 +237,34 @@ proc initOptParser*(cmdline: seq[string], shortNoVal: set[char] = {},
     p = initOptParser(@["--left", "--debug:3", "-l", "-r:2"])
     p = initOptParser(@["--left", "--debug:3", "-l", "-r:2"],
                       shortNoVal = {'l'}, longNoVal = @["left"])
-
-  result.pos = 0
-  result.idx = 0
-  result.inShortState = false
-  result.shortNoVal = shortNoVal
-  result.longNoVal = longNoVal
-  result.allowWhitespaceAfterColon = allowWhitespaceAfterColon
+  result = OptParser(pos: 0, idx: 0, inShortState: false,
+                    shortNoVal: shortNoVal, longNoVal: longNoVal,
+                    allowWhitespaceAfterColon: allowWhitespaceAfterColon
+                    )
   if cmdline.len != 0:
     result.cmds = newSeq[string](cmdline.len)
     for i in 0..<cmdline.len:
       result.cmds[i] = cmdline[i]
   else:
     when declared(paramCount):
-      result.cmds = newSeq[string](paramCount())
-      for i in countup(1, paramCount()):
-        result.cmds[i-1] = paramStr(i)
+      when defined(nimscript):
+        var ctr = 0
+        var firstNimsFound = false
+        for i in countup(0, paramCount()):
+          if firstNimsFound: 
+            result.cmds[ctr] = paramStr(i)
+            inc ctr, 1
+          if paramStr(i).endsWith(".nims") and not firstNimsFound:
+            firstNimsFound = true 
+            result.cmds = newSeq[string](paramCount()-i)
+      else:
+        result.cmds = newSeq[string](paramCount())
+        for i in countup(1, paramCount()):
+          result.cmds[i-1] = paramStr(i)
     else:
       # we cannot provide this for NimRtl creation on Posix, because we can't
       # access the command line arguments then!
-      doAssert false, "empty command line given but" &
+      raiseAssert "empty command line given but" &
         " real command line is not accessible"
   result.kind = cmdEnd
   result.key = ""
@@ -387,14 +400,14 @@ when declared(quoteShellCommand):
     ## * `remainingArgs proc<#remainingArgs,OptParser>`_
     ##
     ## **Examples:**
-    ##
-    ## .. code-block::
+    ##   ```Nim
     ##   var p = initOptParser("--left -r:2 -- foo.txt bar.txt")
     ##   while true:
     ##     p.next()
     ##     if p.kind == cmdLongOption and p.key == "":  # Look for "--"
     ##       break
     ##   doAssert p.cmdLineRest == "foo.txt bar.txt"
+    ##   ```
     result = p.cmds[p.idx .. ^1].quoteShellCommand
 
 proc remainingArgs*(p: OptParser): seq[string] {.rtl, extern: "npo$1".} =
@@ -404,14 +417,14 @@ proc remainingArgs*(p: OptParser): seq[string] {.rtl, extern: "npo$1".} =
   ## * `cmdLineRest proc<#cmdLineRest,OptParser>`_
   ##
   ## **Examples:**
-  ##
-  ## .. code-block::
+  ##   ```Nim
   ##   var p = initOptParser("--left -r:2 -- foo.txt bar.txt")
   ##   while true:
   ##     p.next()
   ##     if p.kind == cmdLongOption and p.key == "":  # Look for "--"
   ##       break
   ##   doAssert p.remainingArgs == @["foo.txt", "bar.txt"]
+  ##   ```
   result = @[]
   for i in p.idx..<p.cmds.len: result.add p.cmds[i]
 
@@ -428,7 +441,7 @@ iterator getopt*(p: var OptParser): tuple[kind: CmdLineKind, key,
   ##
   ## **Examples:**
   ##
-  ## .. code-block::
+  ##   ```Nim
   ##   # these are placeholders, of course
   ##   proc writeHelp() = discard
   ##   proc writeVersion() = discard
@@ -448,6 +461,7 @@ iterator getopt*(p: var OptParser): tuple[kind: CmdLineKind, key,
   ##   if filename == "":
   ##     # no filename has been given, so we show the help
   ##     writeHelp()
+  ##   ```
   p.pos = 0
   p.idx = 0
   while true:
@@ -477,8 +491,7 @@ iterator getopt*(cmdline: seq[string] = @[],
   ##
   ## **Examples:**
   ##
-  ## .. code-block::
-  ##
+  ##   ```Nim
   ##   # these are placeholders, of course
   ##   proc writeHelp() = discard
   ##   proc writeVersion() = discard
@@ -498,6 +511,7 @@ iterator getopt*(cmdline: seq[string] = @[],
   ##   if filename == "":
   ##     # no filename has been written, so we show the help
   ##     writeHelp()
+  ##   ```
   var p = initOptParser(cmdline, shortNoVal = shortNoVal,
       longNoVal = longNoVal)
   while true:

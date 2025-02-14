@@ -39,9 +39,9 @@ runnableExamples("-r:off"):
 
   waitFor main()
 
-import asyncnet, asyncdispatch, parseutils, uri, strutils
-import httpcore
-from nativesockets import getLocalAddr, Domain, AF_INET, AF_INET6
+import std/[asyncnet, asyncdispatch, parseutils, uri, strutils]
+import std/httpcore
+from std/nativesockets import getLocalAddr, Domain, AF_INET, AF_INET6
 import std/private/since
 
 when defined(nimPreviewSlimSystem):
@@ -110,16 +110,16 @@ proc respond*(req: Request, code: HttpCode, content: string,
   ## This procedure will **not** close the client socket.
   ##
   ## Example:
-  ##
-  ## .. code-block:: Nim
-  ##    import std/json
-  ##    proc handler(req: Request) {.async.} =
-  ##      if req.url.path == "/hello-world":
-  ##        let msg = %* {"message": "Hello World"}
-  ##        let headers = newHttpHeaders([("Content-Type","application/json")])
-  ##        await req.respond(Http200, $msg, headers)
-  ##      else:
-  ##        await req.respond(Http404, "Not Found")
+  ##   ```Nim
+  ##   import std/json
+  ##   proc handler(req: Request) {.async.} =
+  ##     if req.url.path == "/hello-world":
+  ##       let msg = %* {"message": "Hello World"}
+  ##       let headers = newHttpHeaders([("Content-Type","application/json")])
+  ##       await req.respond(Http200, $msg, headers)
+  ##     else:
+  ##       await req.respond(Http404, "Not Found")
+  ##   ```
   var msg = "HTTP/1.1 " & $code & "\c\L"
 
   if headers != nil:
@@ -146,6 +146,7 @@ proc respondError(req: Request, code: HttpCode): Future[void] =
   result = req.client.send(msg)
 
 proc parseProtocol(protocol: string): tuple[orig: string, major, minor: int] =
+  result = default(tuple[orig: string, major, minor: int])
   var i = protocol.skipIgnoreCase("HTTP/")
   if i != 5:
     raise newException(ValueError, "Invalid request protocol. Got: " &
@@ -187,7 +188,7 @@ proc processRequest(
   # \n
   request.headers.clear()
   request.body = ""
-  when defined(gcArc) or defined(gcOrc):
+  when defined(gcArc) or defined(gcOrc) or defined(gcAtomicArc):
     request.hostname = address
   else:
     request.hostname.shallowCopy(address)

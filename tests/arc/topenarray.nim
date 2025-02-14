@@ -50,3 +50,37 @@ proc f(a: var string) =
 var a = "Hello"
 f(a)
 doAssert a == "Hallo"
+
+# bug #22132
+block:
+  func foo[T](arr: openArray[T], idx: int = arr.low): string =
+    doAssert idx == 0
+    return $arr
+
+  let bug = ["0", "c", "a"]
+
+  let str = foo(bug)
+
+  const expected = """["0", "c", "a"]"""
+  doAssert str == expected
+
+  const noBugConst = ["0", "c", "a"]
+  doAssert foo(noBugConst) == expected
+  let noBugSeq = @["0", "c", "a"]
+  doAssert foo(noBugSeq) == expected
+
+block: # bug #20865
+  var p: pointer
+  var x: array[0, int]
+  # echo toOpenArray(x, 0, 1)[0] # Raises IndexDefect
+  doAssertRaises(IndexDefect):
+    echo toOpenArray(cast[ptr array[0, int]](p)[], 0, 1)[0] # Does not raise IndexDefect
+
+block: # bug #20987
+  var v: array[1, byte]
+
+  var p = cast[ptr array[0, byte]](addr v)
+
+  doAssertRaises(IndexDefect):
+    echo toOpenArray(p[], 1, 2)
+

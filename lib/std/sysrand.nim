@@ -60,7 +60,7 @@ when not defined(js):
   import std/oserrors
 
 when defined(posix):
-  import posix
+  import std/posix
 
 when defined(nimPreviewSlimSystem):
   import std/assertions
@@ -192,7 +192,7 @@ elif defined(linux) and not defined(nimNoGetRandom) and not defined(emscripten):
     while result < size:
       let readBytes = syscall(SYS_getrandom, addr dest[result], cint(size - result), 0).int
       if readBytes == 0:
-        doAssert false
+        raiseAssert "unreachable"
       elif readBytes > 0:
         inc(result, readBytes)
       else:
@@ -287,6 +287,7 @@ else:
         discard posix.close(fd)
 
 proc urandomInternalImpl(dest: var openArray[byte]): int {.inline.} =
+  result = 0
   when batchImplOS:
     batchImpl(result, dest, getRandomImpl)
   else:

@@ -39,8 +39,7 @@ try:
         if i_cursor == 2:
           return
         add(a):
-          `=wasMoved`(:tmpD)
-          `=copy`(:tmpD, x)
+          :tmpD = `=dup`(x)
           :tmpD
         inc i_1, 1
   if cond:
@@ -65,7 +64,7 @@ proc f(): seq[int] =
   @[1, 2, 3]
 
 proc main(cond: bool) =
-  var a, b: seq[seq[int]]
+  var a, b: seq[seq[int]] = @[]
   var x = f()
   if cond:
     a.add x
@@ -79,7 +78,7 @@ main(false)
 
 
 proc tfor(cond: bool) =
-  var a, b: seq[seq[int]]
+  var a, b: seq[seq[int]] = @[]
 
   var x = f()
 

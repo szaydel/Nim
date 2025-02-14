@@ -9,7 +9,7 @@ float32
 """
 
 
-import tables
+import std/tables
 
 
 block tgeneric0:
@@ -166,3 +166,56 @@ type
 # bug #8295
 var x = AtomicContainer[int]()
 doAssert (ptr Block[int])(x.b) == nil
+
+
+# bug #23233
+type
+  JsonObjectType*[T: string or uint64] = Table[string, JsonValueRef[T]]
+
+  JsonValueRef*[T: string or uint64] = object
+    objVal*: JsonObjectType[T]
+
+proc scanValue[K](val: var K) =
+  var map: JsonObjectType[K.T]
+  var newVal: K
+  map["one"] = newVal
+
+block:
+  var a: JsonValueRef[uint64]
+  scanValue(a)
+
+  var b: JsonValueRef[string]
+  scanValue(b)
+
+block: # bug #21347
+  type K[T] = object
+  template s[T]() = discard
+  proc b1(n: bool | bool) = s[K[K[int]]]()
+  proc b2(n: bool) =        s[K[K[int]]]()
+  b1(false)   # Error: 's' has unspecified generic parameters
+  b2(false)   # Builds, on its own
+
+block: # bug #19531
+  type
+    Foo[T] = object
+
+    Bar[F: Foo] = object
+      c: proc(t: F.T)
+
+  proc cb[F](v: Bar[F]) =
+    v.c(default(F.T))
+
+  type
+    X = object
+      x: uint32
+    Y = object
+      x: uint32
+  proc cbX(v: X) = discard
+  proc cbY(v: Y) = discard
+
+  let
+    x = Bar[Foo[X]](c: cbX)
+    y = Bar[Foo[Y]](c: cbY)
+  x.cb()
+  y.cb()
+

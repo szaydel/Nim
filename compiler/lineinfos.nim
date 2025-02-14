@@ -7,10 +7,11 @@
 #    distribution, for details about the copyright.
 #
 
-## This module contains the ``TMsgKind`` enum as well as the
-## ``TLineInfo`` object.
+## This module contains the `TMsgKind` enum as well as the
+## `TLineInfo` object.
 
-import ropes, tables, pathutils, hashes
+import ropes, pathutils
+import std/[hashes, tables]
 
 const
   explanationsBaseUrl* = "https://nim-lang.github.io/Nim"
@@ -44,6 +45,7 @@ type
     errRstSandboxedDirective,
     errProveInit, # deadcode
     errGenerated,
+    errFailedMove,
     errUser,
     # warnings
     warnCannotOpenFile = "CannotOpenFile", warnOctalEscape = "OctalEscape",
@@ -83,14 +85,18 @@ type
     warnCstringConv = "CStringConv",
     warnPtrToCstringConv = "PtrToCstringConv",
     warnEffect = "Effect",
-    warnCastSizes = "CastSizes"
+    warnCastSizes = "CastSizes", # deadcode
     warnAboveMaxSizeSet = "AboveMaxSizeSet",
     warnImplicitTemplateRedefinition = "ImplicitTemplateRedefinition",
     warnUnnamedBreak = "UnnamedBreak",
     warnStmtListLambda = "StmtListLambda",
     warnBareExcept = "BareExcept",
     warnImplicitDefaultValue = "ImplicitDefaultValue",
+    warnIgnoredSymbolInjection = "IgnoredSymbolInjection",
+    warnStdPrefix = "StdPrefix"
+    warnUnknownNotes = "UnknownNotes"
     warnUser = "User",
+    warnGlobalVarConstructorTemporary = "GlobalVarConstructorTemporary",
     # hints
     hintSuccess = "Success", hintSuccessX = "SuccessX",
     hintCC = "CC",
@@ -103,7 +109,6 @@ type
     hintPattern = "Pattern", hintExecuting = "Exec", hintLinking = "Link", hintDependency = "Dependency",
     hintSource = "Source", hintPerformance = "Performance", hintStackTrace = "StackTrace",
     hintGCStats = "GCStats", hintGlobalVar = "GlobalVar", hintExpandMacro = "ExpandMacro",
-    hintAmbiguousEnum = "AmbiguousEnum",
     hintUser = "User", hintUserRaw = "UserRaw", hintExtendedContext = "ExtendedContext",
     hintMsgOrigin = "MsgOrigin", # since 1.3.5
     hintDeclaredLoc = "DeclaredLoc", # since 1.5.1
@@ -128,6 +133,7 @@ const
     errRstSandboxedDirective: "disabled directive: '$1'",
     errProveInit: "Cannot prove that '$1' is initialized.",  # deadcode
     errGenerated: "$1",
+    errFailedMove: "$1",
     errUser: "$1",
     warnCannotOpenFile: "cannot open '$1'",
     warnOctalEscape: "octal escape sequences do not exist; leading zero is ignored",
@@ -183,16 +189,20 @@ const
     warnAnyEnumConv: "$1",
     warnHoleEnumConv: "$1",
     warnCstringConv: "$1",
-    warnPtrToCstringConv: "unsafe conversion to 'cstring' from '$1'; this will become a compile time error in the future",
+    warnPtrToCstringConv: "unsafe conversion to 'cstring' from '$1'; Use a `cast` operation like `cast[cstring](x)`; this will become a compile time error in the future",
     warnEffect: "$1",
-    warnCastSizes: "$1",
+    warnCastSizes: "$1", # deadcode
     warnAboveMaxSizeSet: "$1",
     warnImplicitTemplateRedefinition: "template '$1' is implicitly redefined; this is deprecated, add an explicit .redefine pragma",
     warnUnnamedBreak: "Using an unnamed break in a block is deprecated; Use a named block with a named break instead",
     warnStmtListLambda: "statement list expression assumed to be anonymous proc; this is deprecated, use `do (): ...` or `proc () = ...` instead",
     warnBareExcept: "$1",
     warnImplicitDefaultValue: "$1",
+    warnIgnoredSymbolInjection: "$1",
+    warnStdPrefix: "$1 needs the 'std' prefix",
+    warnUnknownNotes: "$1",
     warnUser: "$1",
+    warnGlobalVarConstructorTemporary: "global variable '$1' initialization requires a temporary variable",
     hintSuccess: "operation successful: $#",
     # keep in sync with `testament.isSuccess`
     hintSuccessX: "$build\n$loc lines; ${sec}s; $mem; proj: $project; out: $output",
@@ -223,12 +233,11 @@ const
     hintGCStats: "$1",
     hintGlobalVar: "global variable declared here",
     hintExpandMacro: "expanded macro: $1",
-    hintAmbiguousEnum: "$1",
     hintUser: "$1",
     hintUserRaw: "$1",
     hintExtendedContext: "$1",
     hintMsgOrigin: "$1",
-    hintDeclaredLoc: "$1",
+    hintDeclaredLoc: "$1"
   ]
 
 const
@@ -246,7 +255,8 @@ type
   TNoteKinds* = set[TNoteKind]
 
 proc computeNotesVerbosity(): array[0..3, TNoteKinds] =
-  result[3] = {low(TNoteKind)..high(TNoteKind)} - {warnObservableStores, warnResultUsed, warnAnyEnumConv, warnBareExcept}
+  result = default(array[0..3, TNoteKinds])
+  result[3] = {low(TNoteKind)..high(TNoteKind)} - {warnObservableStores, warnResultUsed, warnAnyEnumConv, warnBareExcept, warnStdPrefix}
   result[2] = result[3] - {hintStackTrace, hintExtendedContext, hintDeclaredLoc, hintProcessingStmt}
   result[1] = result[2] - {warnProveField, warnProveIndex,
     warnGcUnsafe, hintPath, hintDependency, hintCodeBegin, hintCodeEnd,
@@ -258,6 +268,7 @@ const
   NotesVerbosity* = computeNotesVerbosity()
   errXMustBeCompileTime* = "'$1' can only be used in compile-time context"
   errArgsNeedRunOption* = "arguments can only be given if the '--run' option is selected"
+  errFloatToString* = "cannot convert '$1' to '$2'"
 
 type
   TFileInfo* = object
@@ -277,7 +288,7 @@ type
                                # and parsed; usually "" but is used
                                # for 'nimsuggest'
     hash*: string              # the checksum of the file
-    dirty*: bool               # for 'nimfix' / 'nimpretty' like tooling
+    dirty*: bool               # for 'nimpretty' like tooling
     when defined(nimpretty):
       fullContent*: string
   FileIndex* = distinct int32
@@ -308,7 +319,7 @@ proc `==`*(a, b: FileIndex): bool {.borrow.}
 proc hash*(i: TLineInfo): Hash =
   hash (i.line.int, i.col.int, i.fileIndex.int)
 
-proc raiseRecoverableError*(msg: string) {.noinline.} =
+proc raiseRecoverableError*(msg: string) {.noinline, noreturn.} =
   raise newException(ERecoverableError, msg)
 
 const
@@ -339,9 +350,8 @@ type
 
 
 proc initMsgConfig*(): MsgConfig =
-  result.msgContext = @[]
-  result.lastError = unknownLineInfo
-  result.filenameToIndexTbl = initTable[string, FileIndex]()
-  result.fileInfos = @[]
-  result.errorOutputs = {eStdOut, eStdErr}
+  result = MsgConfig(msgContext: @[], lastError: unknownLineInfo,
+                     filenameToIndexTbl: initTable[string, FileIndex](),
+                     fileInfos: @[], errorOutputs: {eStdOut, eStdErr}
+  )
   result.filenameToIndexTbl["???"] = FileIndex(-1)

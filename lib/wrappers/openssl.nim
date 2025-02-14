@@ -10,24 +10,25 @@
 ## OpenSSL wrapper. Supports OpenSSL >= 1.1.0 dynamically (as default) or statically linked
 ## using `--dynlibOverride:ssl`.
 ##
-## `-d:sslVersion=1.2.3` can be used to force an SSL version. 
+## `-d:sslVersion=1.2.3` can be used to force an SSL version.
 ## This version must be included in the library name.
 ## `-d:useOpenssl3` may be set for OpenSSL 3 instead.
-## 
+##
 ## There is also limited support for OpenSSL 1.0.x which may require `-d:openssl10`.
 ##
 ## Build and test examples:
 ##
-## .. code-block::
+##   ```cmd
 ##   ./bin/nim c -d:ssl -p:. -r tests/stdlib/tssl.nim
 ##   ./bin/nim c -d:ssl --threads:on -p:. -r tests/stdlib/thttpclient_ssl.nim
 ##   ./bin/nim c -d:ssl -p:. -r tests/untestable/tssl.nim
 ##   ./bin/nim c -d:ssl -p:. --dynlibOverride:ssl --passl:-lcrypto --passl:-lssl -r tests/untestable/tssl.nim
 ##   ./bin/nim r --putenv:NIM_TESTAMENT_REMOTE_NETWORKING:1 -d:ssl -p:testament/lib --threads:on tests/untestable/thttpclient_ssl_remotenetwork.nim
+##   ```
 
 # https://www.feistyduck.com/library/openssl-cookbook/online/ch-testing-with-openssl.html
 #
-from strutils import startsWith
+from std/strutils import startsWith
 
 when defined(nimPreviewSlimSystem):
   import std/syncio
@@ -50,17 +51,17 @@ when sslVersion != "":
     const
       DLLSSLName* = "libssl." & sslVersion & ".dylib"
       DLLUtilName* = "libcrypto." & sslVersion & ".dylib"
-    from posix import SocketHandle
+    from std/posix import SocketHandle
   elif defined(windows):
     const
       DLLSSLName* = "libssl-" & sslVersion & ".dll"
       DLLUtilName* =  "libcrypto-" & sslVersion & ".dll"
-    from winlean import SocketHandle
+    from std/winlean import SocketHandle
   else:
     const
       DLLSSLName* = "libssl.so." & sslVersion
       DLLUtilName* = "libcrypto.so." & sslVersion
-    from posix import SocketHandle
+    from std/posix import SocketHandle
 
 elif useWinVersion:
   when defined(openssl10) or defined(nimOldDlls):
@@ -81,7 +82,7 @@ elif useWinVersion:
       DLLSSLName* = "(libssl-1_1|ssleay32|libssl32).dll"
       DLLUtilName* = "(libcrypto-1_1|libeay32).dll"
 
-  from winlean import SocketHandle
+  from std/winlean import SocketHandle
 else:
   # same list of versions but ordered differently?
   when defined(osx):
@@ -101,9 +102,9 @@ else:
     const
       DLLSSLName* = "libssl.so" & versions
       DLLUtilName* = "libcrypto.so" & versions
-  from posix import SocketHandle
+  from std/posix import SocketHandle
 
-import dynlib
+import std/dynlib
 
 {.pragma: lcrypto, cdecl, dynlib: DLLUtilName, importc.}
 {.pragma: lssl, cdecl, dynlib: DLLSSLName, importc.}
@@ -365,6 +366,8 @@ else:
       result = symAddr(dll, name)
       if result.isNil and alternativeName.len > 0:
         result = symAddr(dll, alternativeName)
+    else:
+      result = nil
 
     # Attempt to load from current exe.
     if result.isNil:
@@ -401,6 +404,7 @@ else:
   proc SSL_library_init*(): cint {.discardable.} =
     ## Initialize SSL using OPENSSL_init_ssl for OpenSSL >= 1.1.0 otherwise
     ## SSL_library_init
+    result = cint(0)
     let newInitSym = sslSymNullable("OPENSSL_init_ssl")
     if not newInitSym.isNil:
       let newInitProc =
@@ -529,11 +533,8 @@ proc BIO_do_handshake*(bio: BIO): int =
 proc BIO_do_connect*(bio: BIO): int =
   return BIO_do_handshake(bio)
 
-when not defined(nimfix):
-  proc BIO_read*(b: BIO, data: cstring, length: cint): cint{.cdecl,
-      dynlib: DLLUtilName, importc.}
-  proc BIO_write*(b: BIO, data: cstring, length: cint): cint{.cdecl,
-      dynlib: DLLUtilName, importc.}
+proc BIO_read*(b: BIO, data: cstring, length: cint): cint{.cdecl, dynlib: DLLUtilName, importc.}
+proc BIO_write*(b: BIO, data: cstring, length: cint): cint{.cdecl, dynlib: DLLUtilName, importc.}
 
 proc BIO_free*(b: BIO): cint{.cdecl, dynlib: DLLUtilName, importc.}
 
@@ -559,6 +560,7 @@ proc i2d_X509*(cert: PX509; o: ptr ptr uint8): cint {.cdecl,
 
 proc d2i_X509*(b: string): PX509 =
   ## decode DER/BER bytestring into X.509 certificate struct
+  result = default(PX509)
   var bb = b.cstring
   let i = cast[ptr ptr uint8](addr bb)
   let ret = d2i_X509(addr result, i, b.len.cint)
@@ -589,7 +591,7 @@ when not useWinVersion and not defined(macosx) and not defined(android) and useN
     if p != nil: deallocShared(p)
 
   proc CRYPTO_malloc_init*() =
-    CRYPTO_set_mem_functions(allocWrapper, reallocWrapper, deallocWrapper)
+    CRYPTO_set_mem_functions(cast[pointer](allocWrapper), cast[pointer](reallocWrapper), cast[pointer](deallocWrapper))
 else:
   proc CRYPTO_malloc_init*() =
     discard
@@ -781,7 +783,7 @@ proc md5*(d: ptr uint8; n: csize_t; md: ptr uint8): ptr uint8{.importc: "MD5".}
 proc md5_Transform*(c: var MD5_CTX; b: ptr uint8){.importc: "MD5_Transform".}
 {.pop.}
 
-from strutils import toHex, toLowerAscii
+from std/strutils import toHex, toLowerAscii
 
 proc hexStr(buf: cstring): string =
   # turn md5s output into a nice hex str
@@ -797,8 +799,8 @@ proc md5_File*(file: string): string {.raises: [IOError,Exception].} =
     sz = 512
   let f = open(file,fmRead)
   var
-    buf: array[sz,char]
-    ctx: MD5_CTX
+    buf: array[sz, char] = default(array[sz, char])
+    ctx: MD5_CTX = default(MD5_CTX)
 
   discard md5_Init(ctx)
   while (let bytes = f.readChars(buf); bytes > 0):
@@ -813,7 +815,7 @@ proc md5_Str*(str: string): string =
   ## Generate MD5 hash for a string. Result is a 32 character
   ## hex string with lowercase characters
   var
-    ctx: MD5_CTX
+    ctx: MD5_CTX = default(MD5_CTX)
     res: array[MD5_DIGEST_LENGTH,char]
     input = str.cstring
   discard md5_Init(ctx)

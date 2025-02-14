@@ -26,7 +26,7 @@
 ## Each builds on top of the layers below it. The selectors module is an
 ## abstraction for the various system `select()` mechanisms such as epoll or
 ## kqueue. If you wish you can use it directly, and some people have done so
-## `successfully <http://goran.krampe.se/2014/10/25/nim-socketserver/>`_.
+## `successfully <https://goran.krampe.se/2014/10/25/nim-socketserver/>`_.
 ## But you must be aware that on Windows it only supports
 ## `select()`.
 ##
@@ -99,7 +99,7 @@ import std/private/since
 when defined(nimPreviewSlimSystem):
   import std/[assertions, syncio]
 
-import asyncdispatch, nativesockets, net, os
+import std/[asyncdispatch, nativesockets, net, os]
 
 export SOBool
 
@@ -110,7 +110,7 @@ const useNimNetLite = defined(nimNetLite) or defined(freertos) or defined(zephyr
     defined(nuttx)
 
 when defineSsl:
-  import openssl
+  import std/openssl
 
 type
   # TODO: I would prefer to just do:
@@ -682,12 +682,12 @@ when defined(posix) and not useNimNetLite:
         elif ret == EINTR:
           return false
         else:
-          retFuture.fail(newException(OSError, osErrorMsg(OSErrorCode(ret))))
+          retFuture.fail(newOSError(OSErrorCode(ret)))
           return true
 
       var socketAddr = makeUnixAddr(path)
       let ret = socket.fd.connect(cast[ptr SockAddr](addr socketAddr),
-                        (sizeof(socketAddr.sun_family) + path.len).SockLen)
+                        (offsetOf(socketAddr, sun_path) + path.len + 1).SockLen)
       if ret == 0:
         # Request to connect completed immediately.
         retFuture.complete()
@@ -696,7 +696,7 @@ when defined(posix) and not useNimNetLite:
         if lastError.int32 == EINTR or lastError.int32 == EINPROGRESS:
           addWrite(AsyncFD(socket.fd), cb)
         else:
-          retFuture.fail(newException(OSError, osErrorMsg(lastError)))
+          retFuture.fail(newOSError(lastError))
 
   proc bindUnix*(socket: AsyncSocket, path: string) {.
     tags: [ReadIOEffect].} =
@@ -705,7 +705,7 @@ when defined(posix) and not useNimNetLite:
     when not defined(nimdoc):
       var socketAddr = makeUnixAddr(path)
       if socket.fd.bindAddr(cast[ptr SockAddr](addr socketAddr),
-          (sizeof(socketAddr.sun_family) + path.len).SockLen) != 0'i32:
+          (offsetOf(socketAddr, sun_path) + path.len + 1).SockLen) != 0'i32:
         raiseOSError(osLastError())
 
 elif defined(nimdoc):
@@ -850,7 +850,7 @@ proc sendTo*(socket: AsyncSocket, address: string, port: Port, data: string,
   var
     it = aiList
     success = false
-    lastException: ref Exception
+    lastException: ref Exception = nil
 
   while it != nil:
     let fut = sendTo(socket.fd.AsyncFD, cstring(data), len(data), it.ai_addr,
@@ -915,16 +915,16 @@ proc recvFrom*(socket: AsyncSocket, data: FutureVar[string], size: int,
          "Cannot `recvFrom` on a TCP socket. Use `recv` or `recvInto` instead")
   assert(not socket.closed, "Cannot `recvFrom` on a closed socket")
   assert(size == len(data.mget()),
-         "`date` was not initialized correctly. `size` != `len(data.mget())`")
+         "`data` was not initialized correctly. `size` != `len(data.mget())`")
   assert(46 == len(address.mget()),
          "`address` was not initialized correctly. 46 != `len(address.mget())`")
 
   case socket.domain
   of AF_INET6:
-    var sAddr: Sockaddr_in6
+    var sAddr: Sockaddr_in6 = default(Sockaddr_in6)
     adaptRecvFromToDomain(AF_INET6)
   of AF_INET:
-    var sAddr: Sockaddr_in
+    var sAddr: Sockaddr_in = default(Sockaddr_in)
     adaptRecvFromToDomain(AF_INET)
   else:
     raise newException(ValueError, "Unknown socket address family")

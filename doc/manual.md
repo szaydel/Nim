@@ -267,7 +267,7 @@ You can also use the [discard statement](#statements-and-expressions-discard-sta
   ```
 
 This was how multiline comments were done before version 0.13.0,
-and it is used to provide specifications to [testament](testament.html#writing-unitests) test framework.
+and it is used to provide specifications to [testament](testament.html#writing-unit-tests) test framework.
 
 
 Identifiers & Keywords
@@ -655,7 +655,7 @@ string containing the literal. The callable identifier needs to be declared
 with a special ``'`` prefix:
 
   ```nim
-  import strutils
+  import std/strutils
   type u4 = distinct uint8 # a 4-bit unsigned integer aka "nibble"
   proc `'u4`(n: string): u4 =
     # The leading ' is required.
@@ -670,7 +670,7 @@ corresponds to this transformation. The transformation naturally handles
 the case that additional parameters are passed to the callee:
 
   ```nim
-  import strutils
+  import std/strutils
   type u4 = distinct uint8 # a 4-bit unsigned integer aka "nibble"
   proc `'u4`(n: string; moreData: int): u4 =
     result = (parseInt(n) and 0x0F).u4
@@ -1495,7 +1495,8 @@ it can be modified:
 
   ```nim
   var x = "123456"
-  var s: cstring = x
+  prepareMutation(x) # call `prepareMutation` before modifying the strings
+  var s: cstring = cstring(x)
   s[0] = 'u' # This is ok
   ```
 
@@ -2240,6 +2241,10 @@ Nim supports these `calling conventions`:idx:\:
     only a hint for the compiler: it may completely ignore it, and
     it may inline procedures that are not marked as `inline`.
 
+`noinline`:idx:
+:   The backend compiler may inline procedures that are not marked as `inline`.
+    The noinline convention prevents it.
+
 `fastcall`:idx:
 :   Fastcall means different things to different C compilers. One gets whatever
     the C `__fastcall` means.
@@ -2618,13 +2623,20 @@ An expression `b` can be assigned to an expression `a` iff `a` is an
 Overload resolution
 ===================
 
-In a call `p(args)` the routine `p` that matches best is selected. If
-multiple routines match equally well, the ambiguity is reported during
-semantic analysis.
+In a call `p(args)` where `p` may refer to more than one
+candidate, it is said to be a symbol choice. Overload resolution will attempt to
+find the best candidate, thus transforming the symbol choice into a resolved symbol.
+The routine `p` that matches best is selected following a series of trials explained below. 
+In order: Category matching, Hierarchical Order Comparison, and finally, Complexity Analysis.
 
-Every arg in args needs to match. There are multiple different categories how an
-argument can match. Let `f` be the formal parameter's type and `a` the type
-of the argument.
+If multiple candidates match equally well after all trials have been tested, the ambiguity 
+is reported during semantic analysis.
+
+First Trial: Category matching
+--------------------------------
+
+Every arg in `args` needs to match and there are multiple different categories of matches.
+Let `f` be the formal parameter's type and `a` the type of the argument.
 
 1. Exact match: `a` and `f` are of the same type.
 2. Literal match: `a` is an integer literal of value `v`
@@ -2642,10 +2654,16 @@ of the argument.
 6. Conversion match: `a` is convertible to `f`, possibly via a user
    defined `converter`.
 
-These matching categories have a priority: An exact match is better than a
-literal match and that is better than a generic match etc. In the following,
-`count(p, m)` counts the number of matches of the matching category `m`
-for the routine `p`.
+Each operand may fall into one of the categories above; the operand's
+highest priority category. The list above is in order or priority.
+If a candidate has more priority matches than all other candidates, it is selected as the
+resolved symbol.
+
+For example, if a candidate with one exact match is compared to a candidate with multiple
+generic matches and zero exact matches, the candidate with an exact match will win.
+
+Below is a pseudocode interpretation of category matching, `count(p, m)` counts the number 
+of matches of the matching category `m` for the routine `p`.
 
 A routine `p` matches better than a routine `q` if the following
 algorithm returns true:
@@ -2662,8 +2680,51 @@ algorithm returns true:
   return "ambiguous"
   ```
 
+Second Trial: Hierarchical Order Comparison
+----------------------------------------------
 
-Some examples:
+The hierarchical order of a type is analogous to its relative specificity. Consider the type defined:
+
+```nim
+type A[T] = object
+```
+
+Matching formals for this type include `T`, `object`, `A`, `A[...]` and `A[C]` where `C` is a concrete type, `A[...]`
+is a generic typeclass composition and `T` is an unconstrained generic type variable. This list is in order of 
+specificity with respect to `A` as each subsequent category narrows the set of types that are members of their match set.
+
+In this trial, the formal parameters of candidates are compared in order (1st parameter, 2nd parameter, etc.) to search for
+a candidate that has an unrivaled specificity. If such a formal parameter is found, the candidate it belongs to is chosen 
+as the resolved symbol.
+
+Third Trial: Complexity Analysis
+----------------------------------
+
+A slight clarification: While category matching digests all the formal parameters of a candidate at once (order doesn't matter),
+specificity comparison and complexity analysis operate on each formal parameter at a time. The following
+is the final trial to disambiguate a symbol choice when a pair of formal parameters have the same hierarchical order.
+
+The complexity of a type is essentially its number of modifiers and depth of shape. The definition with the *highest*
+complexity wins. Consider the following types:
+
+```nim
+type
+  A[T] = object
+  B[T, H] = object
+```
+
+Note: The below examples are not exhaustive.
+
+We shall say that:
+
+1. `A[T]` has a higher complexity than `A`
+2. `var A[T]` has a higher complexity than `A[T]`
+3. `A[A[T]]` has a higher complexity than `A[T]`
+4. `B[T, H]` has a higher complexity than `A[T]` (`A` and `B` are not compatible here, but convoluted versions of this exist)
+5. `B[ptr T, H]` has a higher complexity than `B[T, H]`
+
+Some Examples
+---------------
 
   ```nim
   proc takesInt(x: int) = echo "int"
@@ -2680,7 +2741,6 @@ Some examples:
   ```
 
 
-If this algorithm returns "ambiguous" further disambiguation is performed:
 If the argument `a` matches both the parameter type `f` of `p`
 and `g` of `q` via a subtyping relation, the inheritance depth is taken
 into account:
@@ -2721,6 +2781,23 @@ matches) is preferred:
   var ri: ref int
   gen(ri) # "ref T"
   ```
+
+Type variables match
+----------------------
+
+When overload resolution is considering candidates, the type variable's definition
+is not overlooked as it is used to define the formal parameter's type via variable substitution.
+
+For example:
+```nim
+type A
+proc p[T: A](param: T)
+proc p[T: object](param: T)
+```
+
+These signatures are not ambiguous for a concrete type of `A` even though the formal parameters match ("T" == "T").
+Instead `T` is treated as a variable in that (`T` ?= `T`) depending on the bound type of `T` at the time of
+overload resolution.
 
 
 Overloading based on 'var T'
@@ -2978,9 +3055,9 @@ ref or pointer type             nil
 procedural type                 nil
 sequence                        `@[]`
 string                          `""`
-`tuple[x: A, y: B, ...]`        (default(A), default(B), ...)
+`tuple[x: A, y: B, ...]`        (zeroDefault(A), zeroDefault(B), ...)
                                 (analogous for objects)
-`array[0..., T]`                `[default(T), ...]`
+`array[0..., T]`                `[zeroDefault(T), ...]`
 `range[T]`                      default(T); this may be out of the valid range
 T = enum                        `cast[T](0)`; this may be an invalid value
 ============================    ==============================================
@@ -3146,6 +3223,15 @@ A const section declares constants whose values are constant expressions:
   ```
 
 Once declared, a constant's symbol can be used as a constant expression.
+
+The value part of a constant declaration opens a new scope for each constant,
+so no symbols declared in the constant value are accessible outside of it.
+
+  ```nim
+  const foo = (var a = 1; a)
+  const bar = a # error
+  let baz = a # error
+  ```
 
 See [Constants and Constant Expressions] for details.
 
@@ -3715,9 +3801,6 @@ type conversions to unsigned integers and between unsigned integers. The
 rationale for this is mostly better interoperability with the C Programming
 language when algorithms are ported from C to Nim.
 
-Exception: Values that are converted to an unsigned type at compile time
-are checked so that code like `byte(-1)` does not compile.
-
 **Note**: Historically the operations
 were unchecked and the conversions were sometimes checked but starting with
 the revision 1.0.4 of this document and the language implementation the
@@ -3748,6 +3831,9 @@ prior section. Unlike type conversions, a type cast cannot change the underlying
 bit pattern of the data being cast (aside from that the size of the target type
 may differ from the source type). Casting resembles *type punning* in other
 languages or C++'s `reinterpret_cast`:cpp: and `bit_cast`:cpp: features.
+
+If the size of the target type is larger than the size of the source type,
+the remaining memory is zeroed.
 
 The addr operator
 -----------------
@@ -4381,7 +4467,42 @@ as an example:
 Overloading of the subscript operator
 -------------------------------------
 
-The `[]` subscript operator for arrays/openarrays/sequences can be overloaded.
+The `[]` subscript operator for arrays/openarrays/sequences can be overloaded
+for any type (with some exceptions) by defining a routine with the name `[]`.
+
+  ```nim
+  type Foo = object
+    data: seq[int]
+  
+  proc `[]`(foo: Foo, i: int): int =
+    result = foo.data[i]
+  
+  let foo = Foo(data: @[1, 2, 3])
+  echo foo[1] # 2
+  ```
+
+Assignment to subscripts can also be overloaded by naming a routine `[]=`,
+which has precedence over assigning to the result of `[]`.
+
+  ```nim
+  type Foo = object
+    data: seq[int]
+  
+  proc `[]`(foo: Foo, i: int): int =
+    result = foo.data[i]
+  proc `[]=`(foo: var Foo, i: int, val: int) =
+    foo.data[i] = val
+  
+  var foo = Foo(data: @[1, 2, 3])
+  echo foo[1] # 2
+  foo[1] = 5
+  echo foo.data # @[1, 5, 3]
+  echo foo[1] # 5
+  ```
+
+Overloads of the subscript operator cannot be applied to routine or type
+symbols themselves, as this conflicts with the syntax for instantiating
+generic parameters, i.e. `foo[int](1, 2, 3)` or `Foo[int]`.
 
 
 Methods
@@ -4597,7 +4718,6 @@ Closure iterators and inline iterators have some restrictions:
    (but rarely useful) and ends the iteration.
 3. Inline iterators cannot be recursive.
 4. Neither inline nor closure iterators have the special `result` variable.
-5. Closure iterators are not supported by the JS backend.
 
 Iterators that are neither marked `{.closure.}` nor `{.inline.}` explicitly
 default to being inline, but this may change in future versions of the
@@ -5013,6 +5133,38 @@ exceptions inherit from `Defect`.
 Exceptions that indicate any other runtime error that can be caught inherit from
 `system.CatchableError` (which is a subtype of `Exception`).
 
+```
+Exception
+|-- CatchableError
+|   |-- IOError
+|   |   `-- EOFError
+|   |-- OSError
+|   |-- ResourceExhaustedError
+|   `-- ValueError
+|       `-- KeyError
+`-- Defect
+    |-- AccessViolationDefect
+    |-- ArithmeticDefect
+    |   |-- DivByZeroDefect
+    |   `-- OverflowDefect
+    |-- AssertionDefect
+    |-- DeadThreadDefect
+    |-- FieldDefect
+    |-- FloatingPointDefect
+    |   |-- FloatDivByZeroDefect
+    |   |-- FloatInvalidOpDefect
+    |   |-- FloatOverflowDefect
+    |   |-- FloatUnderflowDefect
+    |   `-- InexactDefect
+    |-- IndexDefect
+    |-- NilAccessDefect
+    |-- ObjectAssignmentDefect
+    |-- ObjectConversionDefect
+    |-- OutOfMemoryDefect
+    |-- RangeDefect
+    |-- ReraiseDefect
+    `-- StackOverflowDefect
+```
 
 Imported exceptions
 -------------------
@@ -5021,7 +5173,7 @@ It is possible to raise/catch imported C++ exceptions. Types imported using
 `importcpp` can be raised or caught. Exceptions are raised by value and
 caught by reference. Example:
 
-  ```nim  test = "nim cpp -r $1"
+  ```nim
   type
     CStdException {.importcpp: "std::exception", header: "<exception>", inheritable.} = object
       ## does not inherit from `RootObj`, so we use `inheritable` instead
@@ -5034,22 +5186,22 @@ caught by reference. Example:
   proc fn() =
     let a = initRuntimeError("foo")
     doAssert $a.what == "foo"
-    var b: cstring
+    var b = ""
     try: raise initRuntimeError("foo2")
     except CStdException as e:
       doAssert e is CStdException
-      b = e.what()
-    doAssert $b == "foo2"
+      b = $e.what()
+    doAssert b == "foo2"
 
     try: raise initStdException()
     except CStdException: discard
 
     try: raise initRuntimeError("foo3")
     except CRuntimeError as e:
-      b = e.what()
+      b = $e.what()
     except CStdException:
       doAssert false
-    doAssert $b == "foo3"
+    doAssert b == "foo3"
 
   fn()
   ```
@@ -5114,7 +5266,7 @@ possibly raised exceptions; the algorithm operates on `p`'s call graph:
    raise `system.Exception` (the base type of the exception hierarchy) and
    thus any exception unless `T` has an explicit `raises` list.
    However, if the call is of the form `f(...)` where `f` is a parameter of
-   the currently analyzed routine it is ignored that is marked as `.effectsOf: f`.
+   the currently analyzed routine that is marked as `.effectsOf: f`, it is ignored.
    The call is optimistically assumed to have no effect.
    Rule 2 compensates for this case.
 2. Every expression `e` of some proc type within a call that is passed to parameter
@@ -5184,7 +5336,7 @@ conservative in its effect analysis:
   ```nim  test = "nim c $1"  status = 1
   {.push warningAsError[Effect]: on.}
 
-  import algorithm
+  import std/algorithm
 
   type
     MyInt = distinct int
@@ -5312,6 +5464,8 @@ To override the compiler's side effect analysis a `{.noSideEffect.}`
 **Side effects are usually inferred. The inference for side effects is
 analogous to the inference for exception tracking.**
 
+When the compiler cannot infer side effects, as is the case for imported
+functions, one can annotate them with the `sideEffect` pragma.
 
 GC safety effect
 ----------------
@@ -5377,6 +5531,7 @@ Generics are Nim's means to parametrize procs, iterators or types with
 `type parameters`:idx:. Depending on the context, the brackets are used either to
 introduce type parameters or to instantiate a generic proc, iterator, or type.
 
+
 The following example shows how a generic binary tree can be modeled:
 
   ```nim  test = "nim c $1"
@@ -5437,6 +5592,49 @@ The following example shows how a generic binary tree can be modeled:
 
 The `T` is called a `generic type parameter`:idx: or
 a `type variable`:idx:.
+
+
+Generic Procs
+---------------
+
+Let's consider the anatomy of a generic `proc` to agree on defined terminology.
+
+```nim
+p[T: t](arg1: f): y
+```
+
+- `p`: Callee symbol
+- `[...]`: Generic parameters
+- `T: t`: Generic constraint
+- `T`: Type variable
+- `[T: t](arg1: f): y`: Formal signature
+- `arg1: f`: Formal parameter
+- `f`: Formal parameter type
+- `y`: Formal return type
+
+The use of the word "formal" here is to denote the symbols as they are defined by the programmer,
+not as they may be at compile time contextually. Since generics may be instantiated and
+types bound, we have more than one entity to think about when generics are involved.
+
+The usage of a generic will resolve the formally defined expression into an instance of that
+expression bound to only concrete types. This process is called "instantiation".
+
+Brackets at the site of a generic's formal definition specify the "constraints" as in:
+
+```nim
+type Foo[T] = object
+proc p[H;T: Foo[H]](param: T): H
+```
+
+A constraint definition may have more than one symbol defined by separating each definition by
+a `;`. Notice how `T` is composed of `H` and the return  type of `p` is defined as `H`. When this
+generic proc is instantiated `H` will be bound to a concrete type, thus making `T` concrete and
+the return type of `p` will be bound to the same concrete type used to define `H`.
+
+Brackets at the site of usage can be used to supply concrete types to instantiate the generic in the same
+order that the symbols are defined in the constraint. Alternatively, type bindings may be inferred by the compiler
+in some situations, allowing for cleaner code.
+
 
 Is operator
 -----------
@@ -5711,7 +5909,7 @@ at definition and the context at instantiation are considered:
   echo a == b # works!
   ```
 
-In the example, the generic `==` for tuples (as defined in the system module)
+In the example, the [generic `==` for tuples](system.html#%3D%3D%2CT%2CT_2) (as defined in the system module)
 uses the `==` operators of the tuple's components. However, the `==` for
 the `Index` type is defined *after* the `==` for tuples; yet the example
 compiles as the instantiation takes the currently defined symbols into account
@@ -6063,9 +6261,12 @@ scope is controlled by the `inject`:idx: and `gensym`:idx: pragmas:
 `gensym`'ed symbols are not exposed but `inject`'ed symbols are.
 
 The default for symbols of entity `type`, `var`, `let` and `const`
-is `gensym` and for `proc`, `iterator`, `converter`, `template`,
-`macro` is `inject`. However, if the name of the entity is passed as a
-template parameter, it is an `inject`'ed symbol:
+is `gensym`. For `proc`, `iterator`, `converter`, `template`,
+`macro`, the default is `inject`, but if a `gensym` symbol with the same name
+is defined in the same syntax-level scope, it will be `gensym` by default.
+This can be overridden by marking the routine as `inject`. 
+
+If the name of the entity is passed as a template parameter, it is an `inject`'ed symbol:
 
   ```nim
   template withFile(f, fn, mode: untyped, actions: untyped): untyped =
@@ -6866,30 +7067,52 @@ All identifiers of a module are valid from the point of declaration until
 the end of the module. Identifiers from indirectly dependent modules are *not*
 available. The `system`:idx: module is automatically imported in every module.
 
-If a module imports an identifier by two different modules, each occurrence of
-the identifier has to be qualified unless it is an overloaded procedure or
-iterator in which case the overloading resolution takes place:
+If a module imports the same identifier from two different modules, the
+identifier is considered ambiguous, which can be resolved in the following ways:
+
+* Qualifying the identifier as `module.identifier` resolves ambiguity
+  between modules. (See below for the case that the module name itself
+  is ambiguous.)
+* Calling the identifier as a routine makes overload resolution take place,
+  which resolves ambiguity in the case that one overload matches stronger
+  than the others.
+* Using the identifier in a context where the compiler can infer the type
+  of the identifier resolves ambiguity in the case that one definition
+  matches the type stronger than the others.
 
   ```nim
   # Module A
   var x*: string
+  proc foo*(a: string) =
+    echo "A: ", a
   ```
 
   ```nim
   # Module B
   var x*: int
+  proc foo*(b: int) =
+    echo "B: ", b
   ```
 
   ```nim
   # Module C
   import A, B
+
+  foo("abc") # A: abc
+  foo(123) # B: 123
+  let inferred: proc (x: string) = foo
+  foo("def") # A: def
+
   write(stdout, x) # error: x is ambiguous
   write(stdout, A.x) # no error: qualifier used
+  
+  proc bar(a: int): int = a + 1
+  assert bar(x) == x + 1 # no error: only A.x of type int matches
 
   var x = 4
   write(stdout, x) # not ambiguous: uses the module C's x
   ```
-Modules can share their name, however, when trying to qualify a identifier with the module name the compiler will fail with ambiguous identifier error. One can qualify the identifier by aliasing the module.
+Modules can share their name, however, when trying to qualify an identifier with the module name the compiler will fail with ambiguous identifier error. One can qualify the identifier by aliasing the module.
 
 
 ```nim
@@ -6908,7 +7131,7 @@ proc fb* = echo "buzz"
 import A/C
 import B/C
 
-C.fb() # Error: ambiguous identifier: 'fb'
+C.fb() # Error: ambiguous identifier: 'C'
 ```
 
 
@@ -8427,6 +8650,14 @@ pragma should be used in addition to the `exportc` pragma. See
 [Dynlib pragma for export].
 
 
+Exportcpp pragma
+----------------
+The `exportcpp` pragma works like the `exportc` pragma but it requires the `cpp` backend.
+When compiled with the `cpp` backend, the `exportc` pragma adds `export "C"` to
+the declaration in the generated code so that it can be called from both C and
+C++ code. `exportcpp` pragma doesn't add `export "C"`.
+
+
 Extern pragma
 -------------
 Like `exportc` or `importc`, the `extern` pragma affects name
@@ -8444,8 +8675,7 @@ is available and a literal dollar sign must be written as ``$$``.
 Bycopy pragma
 -------------
 
-The `bycopy` pragma can be applied to an object or tuple type and
-instructs the compiler to pass the type by value to procs:
+The `bycopy` pragma can be applied to an object or tuple type or a proc param. It instructs the compiler to pass the type by value to procs:
 
   ```nim
   type
@@ -8453,14 +8683,73 @@ instructs the compiler to pass the type by value to procs:
       x, y, z: float
   ```
 
-The Nim compiler automatically determines whether a parameter is passed by value or by reference based on the parameter type's size. If a parameter must be passed by value or by reference, (such as when interfacing with a C library) use the bycopy or byref pragmas.
+The Nim compiler automatically determines whether a parameter is passed by value or
+by reference based on the parameter type's size. If a parameter must be passed by value
+or by reference, (such as when interfacing with a C library) use the bycopy or byref pragmas.
+Notice params marked as `byref` takes precedence over types marked as `bycopy`.
 
 Byref pragma
 ------------
 
-The `byref` pragma can be applied to an object or tuple type and instructs
-the compiler to pass the type by reference (hidden pointer) to procs.
+The `byref` pragma can be applied to an object or tuple type or a proc param.
+When applied to a type it instructs the compiler to pass the type by reference
+(hidden pointer) to procs. When applied to a param it will take precedence, even
+if the the type was marked as `bycopy`. When an `importc` type has a `byref` pragma or
+parameters are marked as `byref` in an `importc` proc, these params translate to pointers.
+When an `importcpp` type has a `byref` pragma, these params translate to
+C++ references `&`.
 
+  ```Nim
+  {.emit: """/*TYPESECTION*/
+  typedef struct {
+    int x;
+  } CStruct;
+  """.}
+
+  {.emit: """
+  #ifdef __cplusplus
+  extern "C"
+  #endif
+  int takesCStruct(CStruct* x) {
+    return x->x;
+  }
+  """.}
+
+  type
+    CStruct {.importc, byref.} = object
+      x: cint
+
+  proc takesCStruct(x: CStruct): cint {.importc.}
+  ```
+
+  or
+
+
+  ```Nim
+  type
+    CStruct {.importc.} = object
+      x: cint
+
+  proc takesCStruct(x {.byref.}: CStruct): cint {.importc.}
+  ```
+
+  ```Nim
+  {.emit: """/*TYPESECTION*/
+  struct CppStruct {
+    int x;
+
+    int takesCppStruct(CppStruct& y) {
+      return x + y.x;
+    }
+  };
+  """.}
+
+  type
+    CppStruct {.importcpp, byref.} = object
+      x: cint
+
+  proc takesCppStruct(x, y: CppStruct): cint {.importcpp.}
+  ```
 
 Varargs pragma
 --------------
@@ -8470,7 +8759,7 @@ after the last specified parameter. Nim string values will be converted to C
 strings automatically:
 
   ```Nim
-  proc printf(formatstr: cstring) {.nodecl, varargs.}
+  proc printf(formatstr: cstring) {.header: "<stdio.h>", varargs.}
 
   printf("hallo %s", "world") # "world" will be passed as C string
   ```
@@ -8581,10 +8870,8 @@ Threads
 The `--threads:on`:option: command-line switch is enabled by default. The [typedthreads module](typedthreads.html) module then contains several threading primitives. See [spawn](manual_experimental.html#parallel-amp-spawn) for
 further details.
 
-The only way to create a thread is via `spawn` or
-`createThread`. The invoked proc must not use `var` parameters nor must
-any of its parameters contain a `ref` or `closure` type. This enforces
-the *no heap sharing restriction*.
+The only ways to create a thread is via `spawn` or `createThread`.
+
 
 Thread pragma
 -------------
@@ -8701,9 +8988,7 @@ model low level lockfree mechanisms:
 
 
 The `locks` pragma takes a list of lock expressions `locks: [a, b, ...]`
-in order to support *multi lock* statements. Why these are essential is
-explained in the [lock levels](manual_experimental.md#lock-levels) section
-of experimental manual.
+in order to support *multi lock* statements.
 
 
 ### Protecting general locations
@@ -8758,3 +9043,119 @@ This means the following compiles (for now) even though it really should not:
     inc i
     access a[i].v
   ```
+
+Strict definitions and `out` parameters
+=======================================
+
+*every* local variable must be initialized explicitly before it can be used:
+
+  ```nim
+  proc test =
+    var s: seq[string]
+    s.add "abc" # invalid!
+  ```
+
+Needs to be written as:
+
+  ```nim
+  proc test =
+    var s: seq[string] = @[]
+    s.add "abc" # valid!
+  ```
+
+A control flow analysis is performed in order to prove that a variable has been written to
+before it is used. Thus the following is valid:
+
+  ```nim
+  proc test(cond: bool) =
+    var s: seq[string]
+    if cond:
+      s = @["y"]
+    else:
+      s = @[]
+    s.add "abc" # valid!
+  ```
+
+In this example every path does set `s` to a value before it is used.
+
+  ```nim
+  proc test(cond: bool) =
+    let s: seq[string]
+    if cond:
+      s = @["y"]
+    else:
+      s = @[]
+  ```
+
+`let` statements are allowed to not have an initial value, but every path should set `s` to a value before it is used.
+
+
+`out` parameters
+----------------
+
+An `out` parameter is like a `var` parameter but it must be written to before it can be used:
+
+  ```nim
+  proc myopen(f: out File; name: string): bool =
+    f = default(File)
+    result = open(f, name)
+  ```
+
+While it is usually the better style to use the return type in order to return results API and ABI
+considerations might make this infeasible. Like for `var T` Nim maps `out T` to a hidden pointer.
+For example POSIX's `stat` routine can be wrapped as:
+
+  ```nim
+  proc stat*(a1: cstring, a2: out Stat): cint {.importc, header: "<sys/stat.h>".}
+  ```
+
+When the implementation of a routine with output parameters is analysed, the compiler
+checks that every path before the (implicit or explicit) return does set every output
+parameter:
+
+  ```nim
+  proc p(x: out int; y: out string; cond: bool) =
+    x = 4
+    if cond:
+      y = "abc"
+    # error: not every path initializes 'y'
+  ```
+
+
+Out parameters and exception handling
+-------------------------------------
+
+The analysis should take exceptions into account (but currently does not):
+
+  ```nim
+  proc p(x: out int; y: out string; cond: bool) =
+    x = canRaise(45)
+    y = "abc" # <-- error: not every path initializes 'y'
+  ```
+
+Once the implementation takes exceptions into account it is easy enough to
+use `outParam = default(typeof(outParam))` in the beginning of the proc body.
+
+Out parameters and inheritance
+------------------------------
+
+It is not valid to pass an lvalue of a supertype to an `out T` parameter:
+
+  ```nim
+  type
+    Superclass = object of RootObj
+      a: int
+    Subclass = object of Superclass
+      s: string
+
+  proc init(x: out Superclass) =
+    x = Superclass(a: 8)
+
+  var v: Subclass
+  init v
+  use v.s # the 's' field was never initialized!
+  ```
+
+However, in the future this could be allowed and provide a better way to write object
+constructors that take inheritance into account.
+

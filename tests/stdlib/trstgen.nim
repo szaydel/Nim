@@ -22,11 +22,13 @@ proc toHtml(input: string,
             warnings: ref seq[string] = nil): string =
   ## If `error` is nil then no errors should be generated.
   ## The same goes for `warnings`.
+  result = ""
+
   proc testMsgHandler(filename: string, line, col: int, msgkind: MsgKind,
                       arg: string) =
     let mc = msgkind.whichMsgClass
     let a = $msgkind % arg
-    var message: string
+    var message: string = ""
     toLocation(message, filename, line, col + ColRstOffset)
     message.add " $1: $2" % [$mc, a]
     if mc == mcError:
@@ -1128,7 +1130,7 @@ Test1
 
       Paragraph2 ref `internal anchor`_.
       """
-    let output9 = input9.toHtml
+    let output9 = input9.toHtml(preferRst)
     # _`internal anchor` got erased:
     check "href=\"#internal-anchor\"" notin output9
     check "href=\"#citation-another\"" in output9
@@ -1156,7 +1158,7 @@ Test1
     doAssert "<a href=\"#citation-third\">[Third]</a>" in output10
 
     let input11 = ".. [note]\n"  # should not crash
-    let output11 = input11.toHtml
+    let output11 = input11.toHtml(preferRst)
     doAssert "<a href=\"#citation-note\">[note]</a>" in output11
 
     # check that references to auto-numbered footnotes work
@@ -1246,7 +1248,7 @@ Test1
         "input(8, 4) Warning: language 'anotherLang' not supported"
         ])
     check(output == "<pre class = \"listing\">anything</pre>" &
-                    "<p><pre class = \"listing\">\nsomeCode</pre> </p>")
+                    "<p><pre class = \"listing\">someCode</pre> </p>")
 
   test "RST admonitions":
     # check that all admonitions are implemented
@@ -1443,7 +1445,7 @@ Test1
       Ref. target103_.
 
     """
-    let output2 = input2.toHtml
+    let output2 = input2.toHtml(preferRst)
     # "target101" should be erased and changed to "section-xyz":
     doAssert "href=\"#target300\"" notin output2
     doAssert "id=\"target300\""    notin output2
@@ -1629,8 +1631,8 @@ suite "RST/Code highlight":
 
     """
 
-    let expected = """<blockquote><p><span class="Keyword">def</span> f_name<span class="Punctuation">(</span><span class="Punctuation">arg</span><span class="Operator">=</span><span class="DecNumber">42</span><span class="Punctuation">)</span><span class="Punctuation">:</span>
-    print<span class="Punctuation">(</span><span class="RawData">f&quot;{arg}&quot;</span><span class="Punctuation">)</span></p></blockquote>"""
+    let expected = """<blockquote><p><span class="Keyword">def</span> <span class="Identifier">f_name</span><span class="Punctuation">(</span><span class="Identifier">arg</span><span class="Operator">=</span><span class="DecNumber">42</span><span class="Punctuation">)</span><span class="Punctuation">:</span>
+    <span class="Identifier">print</span><span class="Punctuation">(</span><span class="RawData">f&quot;{arg}&quot;</span><span class="Punctuation">)</span></p></blockquote>"""
 
     check strip(rstToHtml(pythonCode, {}, newStringTable(modeCaseSensitive))) ==
       strip(expected)

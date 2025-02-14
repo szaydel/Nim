@@ -31,7 +31,7 @@ runnableExamples:
 ## * `htmlgen module <htmlgen.html>`_ for html code generator
 
 import std/private/since
-import macros, strtabs, strutils, sequtils
+import std/[macros, strtabs, strutils, sequtils]
 
 when defined(nimPreviewSlimSystem):
   import std/assertions
@@ -514,6 +514,7 @@ proc len*(n: XmlNode): int {.inline.} =
     f.insert(newElement("second"), 0)
     assert len(f) == 2
   if n.k == xnElement: result = len(n.s)
+  else: result = 0
 
 proc kind*(n: XmlNode): XmlNodeKind {.inline.} =
   ## Returns `n`'s kind.
@@ -663,6 +664,7 @@ proc attrsLen*(n: XmlNode): int {.inline.} =
 
   n.expect xnElement
   if not isNil(n.fAttr): result = len(n.fAttr)
+  else: result = 0
 
 proc attr*(n: XmlNode, name: string): string =
   ## Finds the first attribute of `n` with a name of `name`.
@@ -734,6 +736,7 @@ proc addIndent(result: var string, indent: int, addNewLines: bool) =
 proc addImpl(result: var string, n: XmlNode, indent = 0, indWidth = 2,
           addNewLines = true, lastNodeIsText = false) =
   proc noWhitespace(n: XmlNode): bool =
+    result = false
     for i in 0 ..< n.len:
       if n[i].kind in {xnText, xnVerbatimText, xnEntity}: return true
 
@@ -841,7 +844,7 @@ proc child*(n: XmlNode, name: string): XmlNode =
     f.add newElement("secondSon")
     f.add newElement("thirdSon")
     assert $(f.child("secondSon")) == "<secondSon />"
-
+  result = nil
   n.expect xnElement
   for i in items(n):
     if i.kind == xnElement:
@@ -935,11 +938,12 @@ proc xmlConstructor(a: NimNode): NimNode =
 macro `<>`*(x: untyped): untyped =
   ## Constructor macro for XML. Example usage:
   ##
-  ## .. code-block:: nim
-  ##   <>a(href="http://nim-lang.org", newText("Nim rules."))
+  ##   ```nim
+  ##   <>a(href="https://nim-lang.org", newText("Nim rules."))
+  ##   ```
   ##
   ## Produces an XML tree for:
   ##
-  ##     <a href="http://nim-lang.org">Nim rules.</a>
+  ##     <a href="https://nim-lang.org">Nim rules.</a>
   ##
   result = xmlConstructor(x)

@@ -17,7 +17,7 @@
 ## * `sets module <sets.html>`_ for more general hash sets
 
 import std/private/since
-import hashes
+import std/hashes
 
 when defined(nimPreviewSlimSystem):
   import std/assertions
@@ -109,7 +109,6 @@ proc intSetPut[A](t: var PackedSet[A], key: int): Trunk =
   t.data[h] = result
 
 proc bitincl[A](s: var PackedSet[A], key: int) {.inline.} =
-  var ret: Trunk
   var t = intSetPut(s, key shr TrunkShift)
   var u = key and TrunkMask
   t.bits[u shr IntShift] = t.bits[u shr IntShift] or
@@ -199,6 +198,7 @@ proc contains*[A](s: PackedSet[A], key: A): bool =
     assert B notin letters
 
   if s.elems <= s.a.len:
+    result = false
     for i in 0..<s.elems:
       if s.a[i] == ord(key): return true
   else:
@@ -462,7 +462,7 @@ proc union*[A](s1, s2: PackedSet[A]): PackedSet[A] =
       c = union(a, b)
     assert c.len == 5
     assert c == [1, 2, 3, 4, 5].toPackedSet
-
+  result = default(PackedSet[A])
   result.assign(s1)
   incl(result, s2)
 
@@ -509,7 +509,7 @@ proc symmetricDifference*[A](s1, s2: PackedSet[A]): PackedSet[A] =
       c = symmetricDifference(a, b)
     assert c.len == 4
     assert c == [1, 2, 4, 5].toPackedSet
-
+  result = default(PackedSet[A])
   result.assign(s1)
   for item in s2.items:
     if containsOrIncl(result, item):
@@ -545,7 +545,7 @@ proc disjoint*[A](s1, s2: PackedSet[A]): bool =
 proc card*[A](s: PackedSet[A]): int {.inline.} =
   ## Alias for `len() <#len,PackedSet[A]>`_.
   ##
-  ## Card stands for the [cardinality](http://en.wikipedia.org/wiki/Cardinality)
+  ## Card stands for the [cardinality](https://en.wikipedia.org/wiki/Cardinality)
   ## of a set.
   result = s.len()
 

@@ -96,6 +96,23 @@ proc supportsCopyMem*(t: typedesc): bool {.magic: "TypeTrait".}
   ##
   ## Other languages name a type like these `blob`:idx:.
 
+proc hasDefaultValue*(t: typedesc): bool {.magic: "TypeTrait".} =
+  ## Returns true if `t` has a valid default value.
+  runnableExamples:
+    {.experimental: "strictNotNil".}
+    type
+      NilableObject = ref object
+        a: int
+      Object = NilableObject not nil
+      RequiresInit[T] = object
+        a {.requiresInit.}: T
+
+    assert hasDefaultValue(NilableObject)
+    assert not hasDefaultValue(Object)
+    assert hasDefaultValue(string)
+    assert not hasDefaultValue(var string)
+    assert not hasDefaultValue(RequiresInit[int])
+
 proc isNamedTuple*(T: typedesc): bool {.magic: "TypeTrait".} =
   ## Returns true for named tuples, false for any other type.
   runnableExamples:
@@ -112,6 +129,40 @@ template pointerBase*[T](_: typedesc[ptr T | ref T]): typedesc =
     assert (ref A).pointerBase is A # not seq[float]
     assert (var s = "abc"; s[0].addr).typeof.pointerBase is char
   T
+
+proc rangeBase*(T: typedesc[range]): typedesc {.magic: "TypeTrait".} =
+  ## Returns the base type for range types, or the type itself otherwise.
+  ##
+  ## **See also:**
+  ## * `rangeBase template <#rangeBase.t,T>`_
+  runnableExamples:
+    type MyRange = range[0..5]
+    type MyEnum = enum a, b, c
+    type MyEnumRange = range[b..c]
+    doAssert rangeBase(MyRange) is int
+    doAssert rangeBase(MyEnumRange) is MyEnum
+    doAssert rangeBase(range['a'..'z']) is char
+
+template rangeBase*[T: range](a: T): untyped =
+  ## Overload of `rangeBase <#rangeBase,typedesc,static[bool]>`_ for values.
+  runnableExamples:
+    type MyRange = range[0..5]
+    type MyEnum = enum a, b, c
+    type MyEnumRange = range[b..c]
+    let x = MyRange(3)
+    doAssert rangeBase(x) is int
+    doAssert $typeof(rangeBase(x)) == "int"
+    doAssert rangeBase(x) == 3
+    let y: set[MyEnumRange] = {c}
+    for e in y:
+      doAssert rangeBase(e) is MyEnum
+      doAssert $typeof(rangeBase(e)) == "MyEnum"
+      doAssert rangeBase(e) == c
+    let z: seq[range['a'..'z']] = @['c']
+    doAssert rangeBase(z[0]) is char
+    doAssert $typeof(rangeBase(z[0])) == "char"
+    doAssert rangeBase(z[0]) == 'c'
+  rangeBase(typeof(T))(a)
 
 proc distinctBase*(T: typedesc, recursive: static bool = true): typedesc {.magic: "TypeTrait".} =
   ## Returns the base type for distinct types, or the type itself otherwise.
@@ -187,7 +238,7 @@ since (1, 3, 5):
 
     typeof(block: (for ai in a: ai))
 
-import macros
+import std/macros
 
 macro enumLen*(T: typedesc[enum]): int =
   ## Returns the number of items in the enum `T`.
@@ -225,7 +276,7 @@ macro genericParamsImpl(T: typedesc): untyped =
         case ai.typeKind
         of ntyTypeDesc:
           ret = ai
-        of ntyStatic: doAssert false
+        of ntyStatic: raiseAssert "unreachable"
         else:
           # getType from a resolved symbol might return a typedesc symbol.
           # If so, use it directly instead of wrapping it in StaticParam.
@@ -285,7 +336,7 @@ since (1, 1):
     genericParamsImpl(T2)
 
 
-proc hasClosureImpl(n: NimNode): bool = discard "see compiler/vmops.nim"
+proc hasClosureImpl(n: NimNode): bool = raiseAssert "see compiler/vmops.nim"
 
 proc hasClosure*(fn: NimNode): bool {.since: (1, 5, 1).} =
   ## Returns true if the func/proc/etc `fn` has `closure`.

@@ -16,6 +16,8 @@ discard """
 [Suite] RST escaping
 
 [Suite] RST inline markup
+
+[Suite] Misc isssues
 '''
 matrix: "--mm:refc; --mm:orc"
 """
@@ -29,7 +31,9 @@ import os
 import std/[assertions, syncio]
 
 const preferMarkdown = {roPreferMarkdown, roSupportMarkdown, roNimFile, roSandboxDisabled}
+# legacy nimforum / old default mode:
 const preferRst = {roSupportMarkdown, roNimFile, roSandboxDisabled}
+const pureRst = {roNimFile, roSandboxDisabled}
 
 proc toAst(input: string,
             rstOptions: RstParseOptions = preferMarkdown,
@@ -37,11 +41,13 @@ proc toAst(input: string,
             warnings: ref seq[string] = nil): string =
   ## If `error` is nil then no errors should be generated.
   ## The same goes for `warnings`.
+  result = ""
+
   proc testMsgHandler(filename: string, line, col: int, msgkind: MsgKind,
                       arg: string) =
     let mc = msgkind.whichMsgClass
     let a = $msgkind % arg
-    var message: string
+    var message: string = ""
     toLocation(message, filename, line, col + ColRstOffset)
     message.add " $1: $2" % [$mc, a]
     if mc == mcError:
@@ -524,10 +530,76 @@ suite "RST parsing":
             rnFieldBody
               rnLeaf  'Nim'
         rnLiteralBlock
-          rnLeaf  '
-      let a = 1
+          rnLeaf  'let a = 1
       ```'
       """
+
+  test "Markdown footnotes":
+    # Testing also 1) correct order of manually-numbered and automatically-
+    # numbered footnotes; 2) no spaces between references (html & 3 below):
+
+    check(dedent"""
+        Paragraph [^1] [^html-hyphen][^3] and [^latex]
+
+        [^1]: footnote1
+
+        [^html-hyphen]: footnote2
+           continuation2
+
+        [^latex]: footnote4
+
+        [^3]: footnote3
+            continuation3
+        """.toAst ==
+      dedent"""
+        rnInner
+          rnInner
+            rnLeaf  'Paragraph'
+            rnLeaf  ' '
+            rnFootnoteRef
+              rnInner
+                rnLeaf  '1'
+              rnLeaf  'footnote-1'
+            rnLeaf  ' '
+            rnFootnoteRef
+              rnInner
+                rnLeaf  '2'
+              rnLeaf  'footnote-htmlminushyphen'
+            rnFootnoteRef
+              rnInner
+                rnLeaf  '3'
+              rnLeaf  'footnote-3'
+            rnLeaf  ' '
+            rnLeaf  'and'
+            rnLeaf  ' '
+            rnFootnoteRef
+              rnInner
+                rnLeaf  '4'
+              rnLeaf  'footnote-latex'
+          rnFootnoteGroup
+            rnFootnote  anchor='footnote-1'
+              rnInner
+                rnLeaf  '1'
+              rnLeaf  'footnote1'
+            rnFootnote  anchor='footnote-htmlminushyphen'
+              rnInner
+                rnLeaf  '2'
+              rnInner
+                rnLeaf  'footnote2'
+                rnLeaf  ' '
+                rnLeaf  'continuation2'
+            rnFootnote  anchor='footnote-latex'
+              rnInner
+                rnLeaf  '4'
+              rnLeaf  'footnote4'
+            rnFootnote  anchor='footnote-3'
+              rnInner
+                rnLeaf  '3'
+              rnInner
+                rnLeaf  'footnote3'
+                rnLeaf  ' '
+                rnLeaf  'continuation3'
+      """)
 
   test "Markdown code blocks with more > 3 backticks":
     check(dedent"""
@@ -568,8 +640,7 @@ suite "RST parsing":
                 rnLeaf  'test'
               rnFieldBody
           rnLiteralBlock
-            rnLeaf  '
-        let a = 1'
+            rnLeaf  'let a = 1'
         """)
 
     check(dedent"""
@@ -592,8 +663,7 @@ suite "RST parsing":
               rnFieldBody
                 rnLeaf  '1'
           rnLiteralBlock
-            rnLeaf  '
-        let a = 1'
+            rnLeaf  'let a = 1'
         """)
 
   test "additional indentation < 4 spaces is handled fine":
@@ -613,8 +683,7 @@ suite "RST parsing":
                 rnLeaf  'nim'
               [nil]
               rnLiteralBlock
-                rnLeaf  '
-          let a = 1'
+                rnLeaf  '  let a = 1'
       """)
       # | |
       # |  \ indentation of exactly two spaces before 'let a = 1'
@@ -648,8 +717,7 @@ suite "RST parsing":
                   rnFieldBody
                     rnLeaf  'Nim'
               rnLiteralBlock
-                rnLeaf  '
-        CodeBlock()'
+                rnLeaf  'CodeBlock()'
             rnLeaf  ' '
             rnLeaf  'Other'
             rnLeaf  ' '
@@ -917,9 +985,30 @@ suite "RST tables":
         ======   ======
          Inputs  Output
         ======   ======
-        """.toAst(error=error) == "")
+        """.toAst(rstOptions = pureRst, error = error) == "")
     check(error[] == "input(2, 2) Error: Illformed table: " &
                      "this word crosses table column from the right")
+
+    # In nimforum compatibility mode & Markdown we raise a warning instead:
+    let expected = dedent"""
+      rnTable  colCount=2
+        rnTableRow
+          rnTableDataCell
+            rnLeaf  'Inputs'
+          rnTableDataCell
+            rnLeaf  'Output'
+      """
+    for opt in [preferRst, preferMarkdown]:
+      var warnings = new seq[string]
+
+      check(
+        dedent"""
+          ======   ======
+           Inputs  Output
+          ======   ======
+          """.toAst(rstOptions = opt, warnings = warnings) == expected)
+      check(warnings[] == @[
+        "input(2, 2) Warning: RST style: this word crosses table column from the right"])
 
   test "tables with slightly overflowed cells cause an error (2)":
     var error = new string
@@ -929,7 +1018,7 @@ suite "RST tables":
       =====  =====  ======
       False  False  False
       =====  =====  ======
-      """.toAst(error=error))
+      """.toAst(rstOptions = pureRst, error = error))
     check(error[] == "input(2, 8) Error: Illformed table: " &
                      "this word crosses table column from the right")
 
@@ -941,7 +1030,7 @@ suite "RST tables":
       =====  =====  ======
       False  False  False
       =====  =====  ======
-      """.toAst(error=error))
+      """.toAst(rstOptions = pureRst, error = error))
     check(error[] == "input(2, 7) Error: Illformed table: " &
                      "this word crosses table column from the left")
 
@@ -954,7 +1043,7 @@ suite "RST tables":
       =====  ======
       False  False
       =====  =======
-      """.toAst(error=error))
+      """.toAst(rstOptions = pureRst, error = error))
     check(error[] == "input(5, 14) Error: Illformed table: " &
                      "end of table column #2 should end at position 13")
 
@@ -966,7 +1055,7 @@ suite "RST tables":
       =====  =======
       False  False
       =====  ======
-      """.toAst(error=error))
+      """.toAst(rstOptions = pureRst, error = error))
     check(error[] == "input(3, 14) Error: Illformed table: " &
                      "end of table column #2 should end at position 13")
 
@@ -1895,3 +1984,13 @@ suite "RST inline markup":
           rnLeaf  ')'
       """)
     check(warnings[] == @["input(1, 5) Warning: broken link 'f'"])
+
+suite "Misc isssues":
+  test "Markdown CodeblockFields in one line (lacking enclosing ```)":
+    let message = """
+    ```llvm-profdata merge first.profraw second.profraw third.profraw <more stuff maybe> -output data.profdata```"""
+
+    try:
+      echo rstgen.rstToHtml(message, {roSupportMarkdown}, nil)
+    except EParseError:
+      discard
